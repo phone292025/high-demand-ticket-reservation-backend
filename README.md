@@ -19,7 +19,7 @@ The API runs on:
 http://localhost:3000
 ```
 
-## Assignment Summary
+## Project Summary
 
 ### How Double-Selling Is Prevented
 
