@@ -212,7 +212,7 @@ Seed data is created with:
 npm.cmd run seed
 ```
 
-Running the seed script also restores the three demo concerts to their assignment stock values, which makes repeated local testing easier.
+Running the seed script also restores the three demo concerts to their default stock values, which makes repeated local testing easier.
 
 Seeded concerts:
 
@@ -335,7 +335,7 @@ Snapshots:   0 total
 
 ## SQLite Concurrency Note
 
-SQLite is used because it is required by the assignment. The app enables WAL mode and `busy_timeout` to reduce write conflicts. The reservation flow uses an atomic conditional stock update inside a transaction, which prevents overselling even under concurrent requests.
+SQLite keeps the project easy to run locally with a single database file. The app enables WAL mode and `busy_timeout` to reduce write conflicts. The reservation flow uses an atomic conditional stock update inside a transaction, which prevents overselling even under concurrent requests.
 
 In a real production ticketing system for thousands of simultaneous users, PostgreSQL or MySQL with row-level locking, connection pooling, and stronger operational tooling would be preferred.
 
