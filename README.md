@@ -218,7 +218,7 @@ Global error response format:
 }
 ```
 
-## Day 3 Hardening
+## Hardening
 
 ### Correlation IDs And Logging
 
@@ -346,7 +346,7 @@ Swagger UI is available at:
 http://localhost:3000/api-docs
 ```
 
-The Day 3 brief mentions decorators, but this Express project uses OpenAPI JSDoc to avoid a large framework refactor while still exposing request bodies, success DTOs, and conflict responses in Swagger UI.
+This Express project uses OpenAPI JSDoc to avoid a large framework refactor while still exposing request bodies, success DTOs, and conflict responses in Swagger UI.
 
 The server handles `SIGTERM` by stopping new requests, waiting 5 seconds for in-flight work, closing SQLite, closing Redis, and exiting.
 
@@ -366,7 +366,7 @@ Schema changes are handled by migrations in `src/migrations`:
 
 The second migration adds `tickets.category DEFAULT 'General'`, showing schema evolution after the first version of the ticket table.
 
-The third migration adds `quantity`, `internal_note`, and `version` for Day 3 validation, DTO safety, and optimistic locking.
+The third migration adds `quantity`, `internal_note`, and `version` for validation, DTO safety, and optimistic locking.
 
 The migrations were created through the TypeORM migration workflow instead of relying on automatic synchronization.
 
