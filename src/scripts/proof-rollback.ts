@@ -39,7 +39,8 @@ async function run() {
     await new ReservationService(dataSource).reserveTicket(
       {
         concertId: concert.id,
-        userId: "rollback_proof_user"
+        userId: "rollback_proof_user",
+        quantity: 1
       },
       { forceTicketSaveFailure: true }
     );

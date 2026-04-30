@@ -5,6 +5,7 @@ import { Concert } from "./entities/Concert";
 import { Ticket } from "./entities/Ticket";
 import { CreateConcertsAndTickets1710000000000 } from "./migrations/1710000000000-CreateConcertsAndTickets";
 import { AddCategoryToTicket1710000000001 } from "./migrations/1710000000001-AddCategoryToTicket";
+import { AddDay3TicketHardeningColumns1710000000002 } from "./migrations/1710000000002-AddDay3TicketHardeningColumns";
 
 export function buildDataSourceOptions(database?: string): DataSourceOptions {
   return {
@@ -16,7 +17,8 @@ export function buildDataSourceOptions(database?: string): DataSourceOptions {
     entities: [Concert, Ticket],
     migrations: [
       CreateConcertsAndTickets1710000000000,
-      AddCategoryToTicket1710000000001
+      AddCategoryToTicket1710000000001,
+      AddDay3TicketHardeningColumns1710000000002
     ],
     synchronize: false,
     logging: process.env.TYPEORM_LOGGING === "true"

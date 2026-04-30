@@ -13,6 +13,12 @@ npm.cmd run seed
 npm.cmd run dev
 ```
 
+For Redis-backed rate limiting, start Redis before `npm.cmd run dev`:
+
+```powershell
+docker run --name ticket-redis -p 6379:6379 -d redis:7-alpine
+```
+
 The API runs on:
 
 ```text
@@ -29,11 +35,12 @@ Instead, `POST /reserve` uses `queryRunner.startTransaction()` and performs one 
 
 ```sql
 UPDATE concerts
-SET availableStock = availableStock - 1
-WHERE id = ? AND availableStock > 0;
+SET availableStock = availableStock - :quantity
+WHERE id = :concertId
+AND availableStock >= :quantity;
 ```
 
-If SQLite reports `affected rows = 1`, stock was safely reserved and the API creates the `PENDING` ticket in the same transaction. If `affected rows = 0`, no stock was available, so the transaction rolls back and the API returns `409 Sold Out`.
+If SQLite reports `affected rows = 1`, stock was safely reserved and the API creates the `PENDING` ticket in the same transaction. If `affected rows = 0`, not enough stock was available, so the transaction rolls back and the API returns `409 SOLD_OUT`.
 
 The implementation also uses a small in-process write mutex around SQLite write transactions. This is included because SQLite is file-based and uses one TypeORM connection in this project. The mutex reduces local write contention, while the real correctness guarantee still comes from the database transaction plus the atomic conditional stock update.
 
@@ -109,8 +116,12 @@ GET /health
   "endpoints": {
     "health": "GET /health",
     "concerts": "GET /concerts",
+    "tickets": "GET /tickets",
     "reserve": "POST /reserve",
+    "createTicket": "POST /tickets",
     "purchase": "POST /purchase",
+    "purchaseOptimistic": "POST /tickets/:ticketId/purchase-optimistic",
+    "purchasePessimistic": "POST /tickets/:ticketId/purchase-pessimistic",
     "cleanup": "POST /cleanup"
   }
 }
@@ -126,8 +137,12 @@ GET /health
 
 ```http
 GET /concerts
+GET /tickets
 POST /reserve
+POST /tickets
 POST /purchase
+POST /tickets/:ticketId/purchase-optimistic
+POST /tickets/:ticketId/purchase-pessimistic
 POST /cleanup
 ```
 
@@ -137,7 +152,8 @@ Reserve request:
 {
   "concertId": 1,
   "userId": "user_123",
-  "category": "VIP"
+  "category": "VIP",
+  "quantity": 2
 }
 ```
 
@@ -150,12 +166,15 @@ Reserve response:
     "concertId": 1,
     "userId": "user_123",
     "status": "PENDING",
-    "category": "VIP"
+    "category": "VIP",
+    "quantity": 2
   }
 }
 ```
 
 A successful reservation creates a `PENDING` ticket with `expiresAt` set to 5 minutes after the reservation time.
+
+`POST /tickets` is an alias of `POST /reserve`. Both routes use the same Redis rate limiter and the same reservation service method.
 
 Purchase request:
 
@@ -189,6 +208,148 @@ Cleanup response:
 }
 ```
 
+Global error response format:
+
+```json
+{
+  "error": "VALIDATION_ERROR",
+  "message": "Invalid request body",
+  "ref": "same-correlation-id-from-response-header"
+}
+```
+
+## Day 3 Hardening
+
+### Correlation IDs And Logging
+
+Every request receives an `X-Correlation-ID`. If the client does not send one, the API generates a UUID and returns it in the response header.
+
+The project uses `AsyncLocalStorage` so Pino JSON logs automatically include `correlation_id` without passing it through service functions.
+
+Example validation failure log flow:
+
+```powershell
+npm.cmd run proof:logs
+```
+
+```json
+{"correlation_id":"day3-log-proof-correlation","msg":"Request received","method":"POST","path":"/reserve"}
+{"correlation_id":"day3-log-proof-correlation","msg":"Validation error","error":"VALIDATION_ERROR"}
+{"correlation_id":"day3-log-proof-correlation","msg":"Global error handled","error":"VALIDATION_ERROR"}
+```
+
+### Validation And DTO Safety
+
+`POST /reserve` and `POST /tickets` use strict Zod validation:
+
+- `concertId`: positive integer
+- `userId`: non-empty string
+- `category`: non-empty string, default `General`
+- `quantity`: integer from `1` to `5`
+- unknown properties are rejected
+
+`GET /tickets` uses a response DTO and never returns the database-only `internalNote` or `version` fields.
+
+### Redis Rate Limit Proof
+
+Both reservation creation endpoints are limited to 5 requests per minute per IP:
+
+```http
+POST /reserve
+POST /tickets
+```
+
+Redis was started with:
+
+```powershell
+docker run --name ticket-redis -p 6379:6379 -d redis:7-alpine
+```
+
+Redis container check:
+
+```text
+NAMES          STATUS         PORTS
+ticket-redis   Up 7 minutes   0.0.0.0:6379->6379/tcp, [::]:6379->6379/tcp
+```
+
+Then the proof script was run:
+
+```powershell
+npm.cmd run proof:rate-limit
+```
+
+Actual result from the latest run:
+
+```json
+{
+  "scenario": "Six reservation requests within one minute",
+  "expected": "First five allowed, sixth returns 429 RATE_LIMITED",
+  "statuses": [
+    201,
+    201,
+    201,
+    201,
+    201,
+    429
+  ],
+  "sixthResponse": {
+    "status": 429,
+    "body": {
+      "error": "RATE_LIMITED",
+      "message": "Too many reservation requests. Please try again later.",
+      "ref": "542c4586-8169-49db-b365-ca849555b53e"
+    }
+  }
+}
+```
+
+This proves Redis-backed rate limiting is active: the first five reservation requests were accepted, and the sixth request in the same minute was blocked with `429 RATE_LIMITED`.
+
+### Optimistic And Pessimistic Purchase
+
+Optimistic purchase uses an explicit version-based conditional update:
+
+```sql
+UPDATE tickets
+SET status = 'COMPLETED',
+    version = version + 1
+WHERE id = :ticketId
+AND userId = :userId
+AND status = 'PENDING'
+AND version = :currentVersion
+AND expiresAt > :now;
+```
+
+If `affected rows = 0`, the API returns `409 LOCK_CONFLICT`.
+
+The pessimistic endpoint is implemented for testing, but SQLite does not provide true `SELECT FOR UPDATE` row-level locking. The project uses serialized transaction behavior as a SQLite-safe fallback. In production, PostgreSQL/MySQL would be used for real row-level locking.
+
+Stress test:
+
+```powershell
+npm.cmd run stress:purchase
+```
+
+Expected result:
+
+```text
+Two simultaneous purchase requests for the same pending ticket:
+- one 200 COMPLETED
+- one 409 LOCK_CONFLICT
+```
+
+### Swagger And Shutdown
+
+Swagger UI is available at:
+
+```text
+http://localhost:3000/api-docs
+```
+
+The Day 3 brief mentions decorators, but this Express project uses OpenAPI JSDoc to avoid a large framework refactor while still exposing request bodies, success DTOs, and conflict responses in Swagger UI.
+
+The server handles `SIGTERM` by stopping new requests, waiting 5 seconds for in-flight work, closing SQLite, closing Redis, and exiting.
+
 ## Database And Migrations
 
 TypeORM is configured with:
@@ -201,8 +362,11 @@ Schema changes are handled by migrations in `src/migrations`:
 
 1. `1710000000000-CreateConcertsAndTickets.ts`
 2. `1710000000001-AddCategoryToTicket.ts`
+3. `1710000000002-AddDay3TicketHardeningColumns.ts`
 
 The second migration adds `tickets.category DEFAULT 'General'`, showing schema evolution after the first version of the ticket table.
+
+The third migration adds `quantity`, `internal_note`, and `version` for Day 3 validation, DTO safety, and optimistic locking.
 
 The migrations were created through the TypeORM migration workflow instead of relying on automatic synchronization.
 
@@ -228,11 +392,12 @@ The reservation flow uses `queryRunner.startTransaction()` and an atomic conditi
 
 ```sql
 UPDATE concerts
-SET availableStock = availableStock - 1
-WHERE id = ? AND availableStock > 0;
+SET availableStock = availableStock - :quantity
+WHERE id = :concertId
+AND availableStock >= :quantity;
 ```
 
-If `affected rows = 1`, the API creates a `PENDING` ticket in the same transaction and commits. If `affected rows = 0`, the transaction rolls back and the API returns `409 Sold Out`.
+If `affected rows = 1`, the API creates a `PENDING` ticket in the same transaction and commits. If `affected rows = 0`, the transaction rolls back and the API returns `409 SOLD_OUT`.
 
 The stock decrement and ticket insert are not separate standalone operations. If ticket creation fails after stock is decremented, the transaction rolls back and stock is restored.
 
@@ -316,10 +481,16 @@ The integration tests cover:
 - `GET /health`
 - `GET /` API index
 - malformed JSON validation
+- correlation ID generation and preservation
+- strict Zod validation
 - seeded concert listing
 - successful reservation
+- quantity-based stock decrement
 - sold-out reservation
 - concurrent reservation attempts
+- safe `GET /tickets` DTOs
+- optimistic and pessimistic purchase conflict handling
+- Swagger spec coverage
 - purchase ownership, status, and expiry checks
 - cleanup of expired pending reservations
 - cleanup stock cap so stock cannot exceed `totalStock`
@@ -329,7 +500,7 @@ Latest test output:
 
 ```text
 Test Suites: 1 passed, 1 total
-Tests:       12 passed, 12 total
+Tests:       20 passed, 20 total
 Snapshots:   0 total
 ```
 

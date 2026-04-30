@@ -7,7 +7,8 @@ import {
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
-  UpdateDateColumn
+  UpdateDateColumn,
+  VersionColumn
 } from "typeorm";
 import { Concert } from "./Concert";
 import { TicketStatus } from "./TicketStatus";
@@ -43,6 +44,15 @@ export class Ticket {
 
   @Column({ type: "varchar", default: "General" })
   category!: string;
+
+  @Column({ type: "integer", default: 1 })
+  quantity!: number;
+
+  @Column({ name: "internal_note", type: "varchar", nullable: true })
+  internalNote!: string | null;
+
+  @VersionColumn({ type: "integer", default: 1 })
+  version!: number;
 
   @CreateDateColumn({ type: "datetime" })
   createdAt!: Date;

@@ -17,7 +17,7 @@ export class CleanupService {
     return runWriteTransaction(this.dataSource, async (queryRunner) => {
       const expiredTickets = await queryRunner.manager
         .createQueryBuilder(Ticket, "ticket")
-        .select(["ticket.id", "ticket.concertId"])
+        .select(["ticket.id", "ticket.concertId", "ticket.quantity"])
         .where("ticket.status = 'PENDING'")
         .andWhere("ticket.expiresAt < :now", { now: formatSqliteDate(now) })
         .getMany();
@@ -29,7 +29,8 @@ export class CleanupService {
       const ticketIds = expiredTickets.map((ticket) => ticket.id);
       const releasedByConcert = expiredTickets.reduce<Record<number, number>>(
         (counts, ticket) => {
-          counts[ticket.concertId] = (counts[ticket.concertId] ?? 0) + 1;
+          counts[ticket.concertId] =
+            (counts[ticket.concertId] ?? 0) + ticket.quantity;
           return counts;
         },
         {}

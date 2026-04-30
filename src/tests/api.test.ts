@@ -38,36 +38,91 @@ describe("High-demand ticket reservation API", () => {
     );
   }
 
-  it("returns health status", async () => {
+  function reserve(concertId: number, userId: string, quantity = 1) {
+    return request(app)
+      .post("/reserve")
+      .send({ concertId, userId, category: "General", quantity });
+  }
+
+  it("returns health status with a generated correlation id", async () => {
     const response = await request(app).get("/health").expect(200);
 
     expect(response.body).toEqual({ status: "ok" });
+    expect(response.headers["x-correlation-id"]).toBeDefined();
+  });
+
+  it("preserves a provided correlation id", async () => {
+    const response = await request(app)
+      .get("/health")
+      .set("X-Correlation-ID", "test-correlation")
+      .expect(200);
+
+    expect(response.headers["x-correlation-id"]).toBe("test-correlation");
   });
 
   it("returns API information from the root route", async () => {
     const response = await request(app).get("/").expect(200);
 
-    expect(response.body).toMatchObject({
-      name: "High-Demand Ticket Reservation Backend",
-      status: "ok",
-      endpoints: {
-        health: "GET /health",
-        concerts: "GET /concerts",
-        reserve: "POST /reserve",
-        purchase: "POST /purchase",
-        cleanup: "POST /cleanup"
-      }
+    expect(response.body.endpoints).toMatchObject({
+      health: "GET /health",
+      concerts: "GET /concerts",
+      tickets: "GET /tickets",
+      reserve: "POST /reserve",
+      createTicket: "POST /tickets",
+      purchase: "POST /purchase",
+      purchaseOptimistic: "POST /tickets/:ticketId/purchase-optimistic",
+      purchasePessimistic: "POST /tickets/:ticketId/purchase-pessimistic",
+      cleanup: "POST /cleanup"
     });
   });
 
-  it("returns a validation error for malformed JSON", async () => {
+  it("maps malformed JSON through the global error middleware", async () => {
     const response = await request(app)
       .post("/reserve")
       .set("Content-Type", "application/json")
+      .set("X-Correlation-ID", "bad-json-correlation")
       .send("{bad json")
       .expect(400);
 
-    expect(response.body).toEqual({ error: "Invalid JSON body" });
+    expect(response.body).toEqual({
+      error: "VALIDATION_ERROR",
+      message: "Invalid JSON body",
+      ref: "bad-json-correlation"
+    });
+  });
+
+  it("rejects unknown request fields with Zod strict validation", async () => {
+    const response = await request(app)
+      .post("/reserve")
+      .set("X-Correlation-ID", "strict-validation")
+      .send({
+        concertId: 1,
+        userId: "user_123",
+        category: "General",
+        quantity: 1,
+        unexpected: "nope"
+      })
+      .expect(400);
+
+    expect(response.body).toEqual({
+      error: "VALIDATION_ERROR",
+      message: "Invalid request body",
+      ref: "strict-validation"
+    });
+  });
+
+  it("rejects quantity outside 1 to 5", async () => {
+    const response = await request(app)
+      .post("/reserve")
+      .send({
+        concertId: 1,
+        userId: "user_123",
+        category: "General",
+        quantity: 6
+      })
+      .expect(400);
+
+    expect(response.body.error).toBe("VALIDATION_ERROR");
   });
 
   it("returns seeded concerts", async () => {
@@ -83,16 +138,12 @@ describe("High-demand ticket reservation API", () => {
     );
   });
 
-  it("reserves one ticket and decreases stock", async () => {
+  it("reserves tickets and decreases stock by quantity", async () => {
     const concert = await dataSource.getRepository(Concert).findOneByOrFail({
       name: "Rock Night 2026"
     });
 
-    const response = await request(app)
-      .post("/reserve")
-      .send({ concertId: concert.id, userId: "user_123", category: "VIP" })
-      .expect(201);
-
+    const response = await reserve(concert.id, "user_123", 3).expect(201);
     const updatedConcert = await dataSource
       .getRepository(Concert)
       .findOneByOrFail({ id: concert.id });
@@ -101,9 +152,33 @@ describe("High-demand ticket reservation API", () => {
       concertId: concert.id,
       userId: "user_123",
       status: TicketStatus.Pending,
-      category: "VIP"
+      category: "General",
+      quantity: 3
     });
-    expect(updatedConcert.availableStock).toBe(concert.availableStock - 1);
+    expect(response.body.ticket.version).toBeUndefined();
+    expect(response.body.ticket.internalNote).toBeUndefined();
+    expect(updatedConcert.availableStock).toBe(concert.availableStock - 3);
+  });
+
+  it("uses the same reservation behavior through POST /tickets", async () => {
+    const concert = await createConcert(2);
+
+    const response = await request(app)
+      .post("/tickets")
+      .send({
+        concertId: concert.id,
+        userId: "ticket_alias_user",
+        category: "General",
+        quantity: 2
+      })
+      .expect(201);
+
+    const updatedConcert = await dataSource
+      .getRepository(Concert)
+      .findOneByOrFail({ id: concert.id });
+
+    expect(response.body.ticket.quantity).toBe(2);
+    expect(updatedConcert.availableStock).toBe(0);
   });
 
   it("rejects reservation when concert is sold out", async () => {
@@ -111,16 +186,12 @@ describe("High-demand ticket reservation API", () => {
     concert.availableStock = 0;
     await dataSource.getRepository(Concert).save(concert);
 
-    const response = await request(app)
-      .post("/reserve")
-      .send({ concertId: concert.id, userId: "user_123" })
-      .expect(409);
-
+    const response = await reserve(concert.id, "user_123").expect(409);
     const ticketCount = await dataSource.getRepository(Ticket).count({
       where: { concertId: concert.id }
     });
 
-    expect(response.body).toEqual({ error: "Sold Out" });
+    expect(response.body.error).toBe("SOLD_OUT");
     expect(ticketCount).toBe(0);
   });
 
@@ -129,9 +200,7 @@ describe("High-demand ticket reservation API", () => {
 
     const responses = await Promise.all(
       Array.from({ length: 10 }, (_unused, index) =>
-        request(app)
-          .post("/reserve")
-          .send({ concertId: concert.id, userId: `concurrent_user_${index}` })
+        reserve(concert.id, `concurrent_user_${index}`)
       )
     );
 
@@ -150,12 +219,78 @@ describe("High-demand ticket reservation API", () => {
     expect(ticketCount).toBe(2);
   });
 
-  it("only lets the reservation owner purchase an unexpired pending ticket", async () => {
+  it("returns ticket DTOs without version or internalNote", async () => {
     const concert = await createConcert(1);
-    const reserveResponse = await request(app)
-      .post("/reserve")
-      .send({ concertId: concert.id, userId: "owner_user" })
-      .expect(201);
+    const ticket = await dataSource.getRepository(Ticket).save(
+      dataSource.getRepository(Ticket).create({
+        concertId: concert.id,
+        userId: "dto_user",
+        status: TicketStatus.Pending,
+        expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+        category: "General",
+        quantity: 1,
+        internalNote: "do not leak"
+      })
+    );
+
+    const response = await request(app).get("/tickets").expect(200);
+    const dto = response.body.find((item: { id: number }) => item.id === ticket.id);
+
+    expect(dto).toMatchObject({
+      id: ticket.id,
+      concertId: concert.id,
+      userId: "dto_user",
+      quantity: 1
+    });
+    expect(dto.version).toBeUndefined();
+    expect(dto.internalNote).toBeUndefined();
+  });
+
+  it("only lets one optimistic purchase complete", async () => {
+    const concert = await createConcert(1);
+    const reserveResponse = await reserve(concert.id, "owner_user").expect(201);
+    const ticketId = reserveResponse.body.ticket.id;
+
+    const responses = await Promise.all([
+      request(app)
+        .post(`/tickets/${ticketId}/purchase-optimistic`)
+        .send({ userId: "owner_user" }),
+      request(app)
+        .post(`/tickets/${ticketId}/purchase-optimistic`)
+        .send({ userId: "owner_user" })
+    ]);
+
+    const successCount = responses.filter((response) => response.status === 200).length;
+    const conflictCount = responses.filter((response) => response.status === 409).length;
+
+    expect(successCount).toBe(1);
+    expect(conflictCount).toBe(1);
+    expect(
+      responses.find((response) => response.status === 409)?.body.error
+    ).toBe("LOCK_CONFLICT");
+  });
+
+  it("only lets one pessimistic purchase complete", async () => {
+    const concert = await createConcert(1);
+    const reserveResponse = await reserve(concert.id, "owner_user").expect(201);
+    const ticketId = reserveResponse.body.ticket.id;
+
+    const first = await request(app)
+      .post(`/tickets/${ticketId}/purchase-pessimistic`)
+      .send({ userId: "owner_user" })
+      .expect(200);
+    const second = await request(app)
+      .post(`/tickets/${ticketId}/purchase-pessimistic`)
+      .send({ userId: "owner_user" })
+      .expect(409);
+
+    expect(first.body.ticket.status).toBe(TicketStatus.Completed);
+    expect(second.body.error).toBe("LOCK_CONFLICT");
+  });
+
+  it("keeps /purchase as a backwards-compatible route", async () => {
+    const concert = await createConcert(1);
+    const reserveResponse = await reserve(concert.id, "owner_user").expect(201);
 
     await request(app)
       .post("/purchase")
@@ -166,11 +301,6 @@ describe("High-demand ticket reservation API", () => {
       .post("/purchase")
       .send({ ticketId: reserveResponse.body.ticket.id, userId: "owner_user" })
       .expect(200);
-
-    await request(app)
-      .post("/purchase")
-      .send({ ticketId: reserveResponse.body.ticket.id, userId: "owner_user" })
-      .expect(409);
 
     expect(purchaseResponse.body.ticket.status).toBe(TicketStatus.Completed);
   });
@@ -183,7 +313,8 @@ describe("High-demand ticket reservation API", () => {
         userId: "late_user",
         status: TicketStatus.Pending,
         expiresAt: new Date("2020-01-01T00:00:00.000Z"),
-        category: "General"
+        category: "General",
+        quantity: 1
       })
     );
 
@@ -192,11 +323,11 @@ describe("High-demand ticket reservation API", () => {
       .send({ ticketId: expiredTicket.id, userId: "late_user" })
       .expect(409);
 
-    expect(response.body.error).toContain("expired");
+    expect(response.body.error).toBe("LOCK_CONFLICT");
   });
 
-  it("cleans up only expired pending reservations and restores stock", async () => {
-    const concert = await createConcert(1);
+  it("cleans up only expired pending reservations and restores quantity", async () => {
+    const concert = await createConcert(3);
     concert.availableStock = 0;
     await dataSource.getRepository(Concert).save(concert);
     const ticketRepository = dataSource.getRepository(Ticket);
@@ -209,7 +340,8 @@ describe("High-demand ticket reservation API", () => {
         userId: "expired_user",
         status: TicketStatus.Pending,
         expiresAt: oldDate,
-        category: "General"
+        category: "General",
+        quantity: 2
       })
     );
     const freshPendingTicket = await ticketRepository.save(
@@ -218,7 +350,8 @@ describe("High-demand ticket reservation API", () => {
         userId: "fresh_user",
         status: TicketStatus.Pending,
         expiresAt: futureDate,
-        category: "General"
+        category: "General",
+        quantity: 1
       })
     );
     const completedTicket = await ticketRepository.save(
@@ -227,7 +360,8 @@ describe("High-demand ticket reservation API", () => {
         userId: "completed_user",
         status: TicketStatus.Completed,
         expiresAt: oldDate,
-        category: "General"
+        category: "General",
+        quantity: 1
       })
     );
 
@@ -244,7 +378,8 @@ describe("High-demand ticket reservation API", () => {
     });
 
     expect(response.body.expiredCount).toBe(1);
-    expect(updatedConcert.availableStock).toBe(1);
+    expect(response.body.releasedByConcert[String(concert.id)]).toBe(2);
+    expect(updatedConcert.availableStock).toBe(2);
     expect(
       reloadedTickets.find((ticket) => ticket.id === expiredPendingTicket.id)?.status
     ).toBe(TicketStatus.Expired);
@@ -262,7 +397,7 @@ describe("High-demand ticket reservation API", () => {
 
     await expect(
       reservationService.reserveTicket(
-        { concertId: concert.id, userId: "rollback_user" },
+        { concertId: concert.id, userId: "rollback_user", quantity: 1 },
         { forceTicketSaveFailure: true }
       )
     ).rejects.toThrow();
@@ -288,14 +423,16 @@ describe("High-demand ticket reservation API", () => {
         userId: "expired_user_1",
         status: TicketStatus.Pending,
         expiresAt: new Date("2020-01-01T00:00:00.000Z"),
-        category: "General"
+        category: "General",
+        quantity: 1
       }),
       ticketRepository.create({
         concertId: concert.id,
         userId: "expired_user_2",
         status: TicketStatus.Pending,
         expiresAt: new Date("2020-01-01T00:00:00.000Z"),
-        category: "General"
+        category: "General",
+        quantity: 1
       })
     ]);
 
@@ -306,5 +443,18 @@ describe("High-demand ticket reservation API", () => {
       .findOneByOrFail({ id: concert.id });
 
     expect(updatedConcert.availableStock).toBe(1);
+  });
+
+  it("exposes the hardened endpoints in the Swagger spec", async () => {
+    const response = await request(app).get("/api-docs.json").expect(200);
+
+    expect(Object.keys(response.body.paths)).toEqual(
+      expect.arrayContaining([
+        "/reserve",
+        "/tickets",
+        "/tickets/{ticketId}/purchase-optimistic",
+        "/tickets/{ticketId}/purchase-pessimistic"
+      ])
+    );
   });
 });
