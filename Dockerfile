@@ -17,7 +17,6 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV DB_PATH=/app/data/database.sqlite
-ENV REDIS_URL=redis://redis:6379
 
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist

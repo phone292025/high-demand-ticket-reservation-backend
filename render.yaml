@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: high-demand-ticket-reservation-backend
+    runtime: docker
+    plan: free
+    region: singapore
+    branch: main
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DB_PATH
+        value: /app/data/database.sqlite
+      - key: RUN_MIGRATIONS_ON_START
+        value: "true"
+      - key: SEED_ON_START
+        value: "true"
+      - key: ENABLE_RATE_LIMIT
+        value: "false"
+      - key: TYPEORM_LOGGING
+        value: "false"
+      - key: SENTRY_ENVIRONMENT
+        value: production
+      - key: SENTRY_TRACES_SAMPLE_RATE
+        value: "0"

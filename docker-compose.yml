@@ -9,6 +9,9 @@ services:
       PORT: ${PORT:-3000}
       DB_PATH: ${DB_PATH:-/app/data/database.sqlite}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      ENABLE_RATE_LIMIT: ${ENABLE_RATE_LIMIT:-true}
+      RUN_MIGRATIONS_ON_START: ${RUN_MIGRATIONS_ON_START:-false}
+      SEED_ON_START: ${SEED_ON_START:-false}
       TYPEORM_LOGGING: ${TYPEORM_LOGGING:-false}
       SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}

@@ -33,6 +33,19 @@ http://localhost:3000/api/v1/health
 http://localhost:3000/docs
 ```
 
+## Render Free Demo
+
+The repository includes `render.yaml` for a no-cost Render web service demo. Choose the Free instance type in Render and connect this GitHub repository.
+
+Render runs the `Dockerfile` as one web service, so it does not run the `docker-compose.yml` Redis container. For the free demo, `render.yaml` sets `ENABLE_RATE_LIMIT=false` so the API can start without a paid Redis add-on. The Redis-backed limiter is still implemented and proven locally with `npm.cmd run proof:rate-limit`. To enable it online, provide a real `REDIS_URL` from a Redis provider and set `ENABLE_RATE_LIMIT=true`.
+
+The Render demo runs migrations and inserts missing seed concerts on startup:
+
+```text
+RUN_MIGRATIONS_ON_START=true
+SEED_ON_START=true
+```
+
 ## Production Launch
 
 The final production shape is one larger EC2 instance in `ap-southeast-1`:

@@ -27,7 +27,15 @@ export const seedConcertDefinitions = [
   }
 ];
 
-export async function seedConcerts(dataSource: DataSource): Promise<Concert[]> {
+export interface SeedConcertOptions {
+  resetExisting?: boolean;
+}
+
+export async function seedConcerts(
+  dataSource: DataSource,
+  options: SeedConcertOptions = {}
+): Promise<Concert[]> {
+  const resetExisting = options.resetExisting ?? true;
   const concertRepository = dataSource.getRepository(Concert);
   const seededConcerts: Concert[] = [];
 
@@ -38,7 +46,7 @@ export async function seedConcerts(dataSource: DataSource): Promise<Concert[]> {
 
     if (!concert) {
       concert = concertRepository.create(concertDefinition);
-    } else {
+    } else if (resetExisting) {
       concert.venue = concertDefinition.venue;
       concert.startsAt = concertDefinition.startsAt;
       concert.totalStock = concertDefinition.totalStock;
