@@ -4,10 +4,12 @@ import { createApp } from "./app";
 import { registerGracefulShutdown } from "./operations/graceful-shutdown";
 import { createRedisClient } from "./redis/redis-client";
 import { logger } from "./logger/logger";
+import { initializeSentry } from "./observability/sentry";
 
 const port = Number(process.env.PORT ?? 3000);
 
 async function bootstrap() {
+  initializeSentry();
   await initializeDataSource(AppDataSource);
   logger.info("Database connected");
 

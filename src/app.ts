@@ -6,11 +6,13 @@ import { Concert } from "./entities/Concert";
 import { Ticket } from "./entities/Ticket";
 import { swaggerSpec } from "./docs/swagger";
 import { toTicketDto, toTicketDtos } from "./dto/ticket.dto";
+import { AppError, ConcurrencyError } from "./errors/AppError";
 import { errorMiddleware } from "./middleware/error.middleware";
 import { correlationIdMiddleware } from "./middleware/correlation-id.middleware";
 import { createReservationRateLimiter } from "./middleware/rate-limit.middleware";
 import { requestLoggerMiddleware } from "./middleware/request-logger.middleware";
 import { validateBody } from "./middleware/validate.middleware";
+import { logger } from "./logger/logger";
 import { CleanupService } from "./services/cleanup.service";
 import { PurchaseService } from "./services/purchase.service";
 import { ReservationService } from "./services/reservation.service";
@@ -57,42 +59,61 @@ export function createApp(
   app.use(express.json());
 
   app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+  app.use("/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
   app.get("/api-docs.json", (_request, response) => {
     response.json(swaggerSpec);
   });
 
-  app.get("/", (_request, response) => {
+  const apiIndexHandler = (_request: Request, response: Response) => {
     response.json({
       name: "High-Demand Ticket Reservation Backend",
       status: "ok",
       endpoints: {
         health: "GET /health",
+        healthV1: "GET /api/v1/health",
         concerts: "GET /concerts",
+        concertsV1: "GET /api/v1/concerts",
         tickets: "GET /tickets",
+        ticketsV1: "GET /api/v1/tickets",
         reserve: "POST /reserve",
+        reserveV1: "POST /api/v1/reserve",
         createTicket: "POST /tickets",
+        createTicketV1: "POST /api/v1/tickets",
         purchase: "POST /purchase",
+        purchaseV1: "POST /api/v1/purchase",
         purchaseOptimistic: "POST /tickets/:ticketId/purchase-optimistic",
+        purchaseOptimisticV1:
+          "POST /api/v1/tickets/:ticketId/purchase-optimistic",
         purchasePessimistic: "POST /tickets/:ticketId/purchase-pessimistic",
-        cleanup: "POST /cleanup"
+        purchasePessimisticV1:
+          "POST /api/v1/tickets/:ticketId/purchase-pessimistic",
+        cleanup: "POST /cleanup",
+        cleanupV1: "POST /api/v1/cleanup",
+        docs: "GET /docs"
       }
     });
-  });
+  };
 
-  app.get("/health", (_request, response) => {
+  app.get("/", apiIndexHandler);
+  app.get("/api/v1", apiIndexHandler);
+
+  const healthHandler = (_request: Request, response: Response) => {
     response.json({ status: "ok" });
-  });
+  };
 
-  app.get(
-    "/concerts",
-    asyncHandler(async (_request, response) => {
+  app.get("/health", healthHandler);
+  app.get("/api/v1/health", healthHandler);
+
+  const concertsHandler = asyncHandler(async (_request, response) => {
       const concerts = await dataSource.getRepository(Concert).find({
         order: { id: "ASC" }
       });
 
       response.json(concerts);
-    })
-  );
+    });
+
+  app.get("/concerts", concertsHandler);
+  app.get("/api/v1/concerts", concertsHandler);
 
   /**
    * @openapi
@@ -138,16 +159,16 @@ export function createApp(
    *             schema:
    *               $ref: '#/components/schemas/ErrorResponse'
    */
-  app.get(
-    "/tickets",
-    asyncHandler(async (_request, response) => {
+  const ticketsHandler = asyncHandler(async (_request, response) => {
       const tickets = await dataSource.getRepository(Ticket).find({
         order: { id: "ASC" }
       });
 
       response.json(toTicketDtos(tickets));
-    })
-  );
+    });
+
+  app.get("/tickets", ticketsHandler);
+  app.get("/api/v1/tickets", ticketsHandler);
 
   const reserveHandler = asyncHandler(async (request, response) => {
     const ticket = await reservationService.reserveTickets(request.body);
@@ -181,6 +202,12 @@ export function createApp(
     validateBody(reserveTicketSchema),
     reserveHandler
   );
+  app.post(
+    "/api/v1/reserve",
+    reservationRateLimiter,
+    validateBody(reserveTicketSchema),
+    reserveHandler
+  );
 
   app.post(
     "/tickets",
@@ -188,14 +215,23 @@ export function createApp(
     validateBody(reserveTicketSchema),
     reserveHandler
   );
-
   app.post(
-    "/purchase",
-    validateBody(purchaseTicketSchema),
-    asyncHandler(async (request, response) => {
+    "/api/v1/tickets",
+    reservationRateLimiter,
+    validateBody(reserveTicketSchema),
+    reserveHandler
+  );
+
+  const purchaseHandler = asyncHandler(async (request, response) => {
       const ticket = await purchaseService.purchaseTicket(request.body);
       response.json({ ticket: toTicketDto(ticket) });
-    })
+    });
+
+  app.post("/purchase", validateBody(purchaseTicketSchema), purchaseHandler);
+  app.post(
+    "/api/v1/purchase",
+    validateBody(purchaseTicketSchema),
+    purchaseHandler
   );
 
   /**
@@ -223,6 +259,19 @@ export function createApp(
    */
   app.post(
     "/tickets/:ticketId/purchase-optimistic",
+    validateBody(purchaseByRouteSchema),
+    asyncHandler(async (request, response) => {
+      const ticketId = Number(request.params.ticketId);
+      const ticket = await purchaseService.purchaseTicketOptimistic({
+        ticketId,
+        userId: request.body.userId
+      });
+
+      response.json({ ticket: toTicketDto(ticket) });
+    })
+  );
+  app.post(
+    "/api/v1/tickets/:ticketId/purchase-optimistic",
     validateBody(purchaseByRouteSchema),
     asyncHandler(async (request, response) => {
       const ticketId = Number(request.params.ticketId);
@@ -271,14 +320,50 @@ export function createApp(
       response.json({ ticket: toTicketDto(ticket) });
     })
   );
-
   app.post(
-    "/cleanup",
-    asyncHandler(async (_request, response) => {
-      const cleanupResult = await cleanupService.cleanupExpiredReservations();
-      response.json(cleanupResult);
+    "/api/v1/tickets/:ticketId/purchase-pessimistic",
+    validateBody(purchaseByRouteSchema),
+    asyncHandler(async (request, response) => {
+      const ticketId = Number(request.params.ticketId);
+      const ticket = await purchaseService.purchaseTicketPessimistic({
+        ticketId,
+        userId: request.body.userId
+      });
+
+      response.json({ ticket: toTicketDto(ticket) });
     })
   );
+
+  app.post(
+    "/api/v1/debug/concurrency-error",
+    asyncHandler(async (request) => {
+      const debugSecret = process.env.DEBUG_SECRET;
+
+      if (!debugSecret) {
+        throw new AppError(404, "NOT_FOUND", "Not found");
+      }
+
+      if (request.header("X-Debug-Secret") !== debugSecret) {
+        throw new AppError(403, "FORBIDDEN", "Forbidden");
+      }
+
+      logger.warn(
+        { ip: request.ip },
+        "Manual ConcurrencyError triggered for Sentry verification"
+      );
+      throw new ConcurrencyError(
+        "Manual ConcurrencyError test triggered for Sentry verification"
+      );
+    })
+  );
+
+  const cleanupHandler = asyncHandler(async (_request, response) => {
+      const cleanupResult = await cleanupService.cleanupExpiredReservations();
+      response.json(cleanupResult);
+    });
+
+  app.post("/cleanup", cleanupHandler);
+  app.post("/api/v1/cleanup", cleanupHandler);
 
   app.use(errorMiddleware);
 

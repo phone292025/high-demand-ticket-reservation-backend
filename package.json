@@ -10,6 +10,7 @@
     "typeorm": "typeorm-ts-node-commonjs -d src/data-source.ts",
     "migration:generate": "typeorm-ts-node-commonjs -d src/data-source.ts migration:generate",
     "migration:run": "typeorm-ts-node-commonjs -d src/data-source.ts migration:run",
+    "migration:run:prod": "node dist/scripts/run-migrations.js",
     "migration:revert": "typeorm-ts-node-commonjs -d src/data-source.ts migration:revert",
     "seed": "ts-node src/scripts/seed.ts",
     "explain": "ts-node src/scripts/explain.ts",
@@ -24,6 +25,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@sentry/node": "^10.52.0",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "express-rate-limit": "^8.4.1",

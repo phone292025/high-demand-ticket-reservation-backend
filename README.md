@@ -25,6 +25,59 @@ The API runs on:
 http://localhost:3000
 ```
 
+Production aliases are also available locally:
+
+```text
+http://localhost:3000/api/v1
+http://localhost:3000/api/v1/health
+http://localhost:3000/docs
+```
+
+## Production Launch
+
+The final production shape is one larger EC2 instance in `ap-southeast-1`:
+
+```text
+Host Nginx + Certbot
+Docker API container
+Docker Redis container
+Separate /opt/sentry self-hosted Sentry stack
+/opt/ticket-api app deployment folder
+GitHub Actions deploy over SSH
+```
+
+Public routes:
+
+```text
+https://your-name.int.yt/api/v1
+https://your-name.int.yt/docs
+https://sentry-your-name.int.yt
+```
+
+Production `.env` stays only on EC2. GitHub Actions only pulls code, backs up the SQLite file, rebuilds containers, and runs migrations. Real secrets are not committed.
+
+The API Docker Compose file binds the Node API to `127.0.0.1:3000` and keeps Redis private inside Docker. Nginx is the public entrypoint for HTTPS traffic.
+
+Use these deployment assets:
+
+```text
+Dockerfile
+docker-compose.yml
+.env.example
+deploy/nginx/ticket-api.conf
+deploy/nginx/sentry.conf
+.github/workflows/deploy.yml
+```
+
+The Sentry verification endpoint is:
+
+```http
+POST /api/v1/debug/concurrency-error
+X-Debug-Secret: your-secret
+```
+
+It is disabled when `DEBUG_SECRET` is missing, returns `403` for a wrong secret, and throws a `ConcurrencyError` for Sentry verification when the secret is correct.
+
 ## Project Summary
 
 ### How Double-Selling Is Prevented
@@ -115,14 +168,24 @@ GET /health
   "status": "ok",
   "endpoints": {
     "health": "GET /health",
+    "healthV1": "GET /api/v1/health",
     "concerts": "GET /concerts",
+    "concertsV1": "GET /api/v1/concerts",
     "tickets": "GET /tickets",
+    "ticketsV1": "GET /api/v1/tickets",
     "reserve": "POST /reserve",
+    "reserveV1": "POST /api/v1/reserve",
     "createTicket": "POST /tickets",
+    "createTicketV1": "POST /api/v1/tickets",
     "purchase": "POST /purchase",
+    "purchaseV1": "POST /api/v1/purchase",
     "purchaseOptimistic": "POST /tickets/:ticketId/purchase-optimistic",
+    "purchaseOptimisticV1": "POST /api/v1/tickets/:ticketId/purchase-optimistic",
     "purchasePessimistic": "POST /tickets/:ticketId/purchase-pessimistic",
-    "cleanup": "POST /cleanup"
+    "purchasePessimisticV1": "POST /api/v1/tickets/:ticketId/purchase-pessimistic",
+    "cleanup": "POST /cleanup",
+    "cleanupV1": "POST /api/v1/cleanup",
+    "docs": "GET /docs"
   }
 }
 ```
@@ -144,6 +207,17 @@ POST /purchase
 POST /tickets/:ticketId/purchase-optimistic
 POST /tickets/:ticketId/purchase-pessimistic
 POST /cleanup
+GET /api/v1
+GET /api/v1/health
+GET /api/v1/concerts
+GET /api/v1/tickets
+POST /api/v1/reserve
+POST /api/v1/tickets
+POST /api/v1/purchase
+POST /api/v1/tickets/:ticketId/purchase-optimistic
+POST /api/v1/tickets/:ticketId/purchase-pessimistic
+POST /api/v1/cleanup
+GET /docs
 ```
 
 Reserve request:
@@ -297,7 +371,7 @@ Actual result from the latest run:
     "body": {
       "error": "RATE_LIMITED",
       "message": "Too many reservation requests. Please try again later.",
-      "ref": "542c4586-8169-49db-b365-ca849555b53e"
+      "ref": "4d5a3640-278f-478f-b87f-a14e23c14260"
     }
   }
 }
@@ -480,9 +554,12 @@ The integration tests cover:
 
 - `GET /health`
 - `GET /` API index
+- `/api/v1` production aliases
+- `/docs` Swagger alias
 - malformed JSON validation
 - correlation ID generation and preservation
 - strict Zod validation
+- protected `ConcurrencyError` debug endpoint
 - seeded concert listing
 - successful reservation
 - quantity-based stock decrement
@@ -500,8 +577,17 @@ Latest test output:
 
 ```text
 Test Suites: 1 passed, 1 total
-Tests:       20 passed, 20 total
+Tests:       24 passed, 24 total
 Snapshots:   0 total
+```
+
+Latest Docker smoke test:
+
+```text
+docker compose config: passed
+docker build -t ticket-api-production-test .: passed
+docker compose run --rm api node dist/scripts/run-migrations.js: passed
+curl http://127.0.0.1:3000/api/v1/health: {"status":"ok"}
 ```
 
 ## SQLite Concurrency Note

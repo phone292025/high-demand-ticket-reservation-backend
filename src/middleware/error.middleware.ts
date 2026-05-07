@@ -3,6 +3,7 @@ import { ZodError, z } from "zod";
 import { getCorrelationId } from "../context/request-context";
 import { AppError } from "../errors/AppError";
 import { logger } from "../logger/logger";
+import { captureError } from "../observability/sentry";
 
 function mapError(error: unknown): AppError {
   if (error instanceof AppError) {
@@ -39,6 +40,12 @@ export const errorMiddleware: ErrorRequestHandler = (
 ) => {
   const mappedError = mapError(error);
   const correlationId = getCorrelationId();
+
+  captureError(error, {
+    code: mappedError.code,
+    correlationId,
+    statusCode: mappedError.statusCode
+  });
 
   logger.error(
     {

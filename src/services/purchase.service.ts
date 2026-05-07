@@ -1,7 +1,7 @@
 import { DataSource } from "typeorm";
 import { Ticket } from "../entities/Ticket";
 import { TicketStatus } from "../entities/TicketStatus";
-import { AppError } from "../errors/AppError";
+import { AppError, ConcurrencyError } from "../errors/AppError";
 import { logger } from "../logger/logger";
 import { formatSqliteDate } from "../utils/date";
 import { runWriteTransaction } from "../utils/transaction";
@@ -29,11 +29,7 @@ export class PurchaseService {
       });
 
       if (!ticket) {
-        throw new AppError(
-          409,
-          "LOCK_CONFLICT",
-          "Reservation is not pending, has expired, or belongs to another user"
-        );
+        throw new ConcurrencyError();
       }
 
       const updateResult = await queryRunner.manager
@@ -52,11 +48,7 @@ export class PurchaseService {
         .execute();
 
       if ((updateResult.affected ?? 0) === 0) {
-        throw new AppError(
-          409,
-          "LOCK_CONFLICT",
-          "Reservation is not pending, has expired, or belongs to another user"
-        );
+        throw new ConcurrencyError();
       }
 
       const updatedTicket = await queryRunner.manager.findOneByOrFail(Ticket, {
@@ -99,11 +91,7 @@ export class PurchaseService {
         !ticket.expiresAt ||
         ticket.expiresAt <= now
       ) {
-        throw new AppError(
-          409,
-          "LOCK_CONFLICT",
-          "Reservation is not pending, has expired, or belongs to another user"
-        );
+        throw new ConcurrencyError();
       }
 
       ticket.status = TicketStatus.Completed;

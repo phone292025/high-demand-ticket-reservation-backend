@@ -76,6 +76,24 @@ describe("High-demand ticket reservation API", () => {
     });
   });
 
+  it("returns API information from the production /api/v1 route", async () => {
+    const response = await request(app).get("/api/v1").expect(200);
+
+    expect(response.body.endpoints).toMatchObject({
+      healthV1: "GET /api/v1/health",
+      concertsV1: "GET /api/v1/concerts",
+      ticketsV1: "GET /api/v1/tickets",
+      reserveV1: "POST /api/v1/reserve",
+      purchaseV1: "POST /api/v1/purchase",
+      cleanupV1: "POST /api/v1/cleanup"
+    });
+  });
+
+  it("serves health and Swagger through production aliases", async () => {
+    await request(app).get("/api/v1/health").expect(200);
+    await request(app).get("/docs/").expect(200);
+  });
+
   it("maps malformed JSON through the global error middleware", async () => {
     const response = await request(app)
       .post("/reserve")
@@ -109,6 +127,40 @@ describe("High-demand ticket reservation API", () => {
       message: "Invalid request body",
       ref: "strict-validation"
     });
+  });
+
+  it("protects the ConcurrencyError debug endpoint", async () => {
+    const previousDebugSecret = process.env.DEBUG_SECRET;
+
+    try {
+      delete process.env.DEBUG_SECRET;
+      await request(app)
+        .post("/api/v1/debug/concurrency-error")
+        .set("X-Debug-Secret", "secret")
+        .expect(404);
+
+      process.env.DEBUG_SECRET = "debug-secret";
+      await request(app)
+        .post("/api/v1/debug/concurrency-error")
+        .set("X-Debug-Secret", "wrong-secret")
+        .expect(403);
+
+      const response = await request(app)
+        .post("/api/v1/debug/concurrency-error")
+        .set("X-Debug-Secret", "debug-secret")
+        .expect(409);
+
+      expect(response.body.error).toBe("LOCK_CONFLICT");
+      expect(response.body.message).toBe(
+        "Manual ConcurrencyError test triggered for Sentry verification"
+      );
+    } finally {
+      if (previousDebugSecret === undefined) {
+        delete process.env.DEBUG_SECRET;
+      } else {
+        process.env.DEBUG_SECRET = previousDebugSecret;
+      }
+    }
   });
 
   it("rejects quantity outside 1 to 5", async () => {
@@ -168,6 +220,27 @@ describe("High-demand ticket reservation API", () => {
       .send({
         concertId: concert.id,
         userId: "ticket_alias_user",
+        category: "General",
+        quantity: 2
+      })
+      .expect(201);
+
+    const updatedConcert = await dataSource
+      .getRepository(Concert)
+      .findOneByOrFail({ id: concert.id });
+
+    expect(response.body.ticket.quantity).toBe(2);
+    expect(updatedConcert.availableStock).toBe(0);
+  });
+
+  it("uses the same reservation behavior through POST /api/v1/reserve", async () => {
+    const concert = await createConcert(2);
+
+    const response = await request(app)
+      .post("/api/v1/reserve")
+      .send({
+        concertId: concert.id,
+        userId: "api_v1_user",
         category: "General",
         quantity: 2
       })
@@ -454,6 +527,12 @@ describe("High-demand ticket reservation API", () => {
         "/tickets",
         "/tickets/{ticketId}/purchase-optimistic",
         "/tickets/{ticketId}/purchase-pessimistic"
+      ])
+    );
+    expect(response.body.servers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ url: "/api/v1" }),
+        expect.objectContaining({ url: "/" })
       ])
     );
   });

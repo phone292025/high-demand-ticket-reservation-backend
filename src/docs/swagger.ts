@@ -8,6 +8,16 @@ export const swaggerSpec = swaggerJSDoc({
       version: "3.0.0",
       description: "Hardened ticket API with validation, logging, locking, and rate limiting."
     },
+    servers: [
+      {
+        url: "/api/v1",
+        description: "Production API base path"
+      },
+      {
+        url: "/",
+        description: "Local development base path"
+      }
+    ],
     components: {
       schemas: {
         ReserveRequest: {

@@ -3,6 +3,7 @@ import { DataSource } from "typeorm";
 import { RedisClientType } from "redis";
 import { closeRedisClient } from "../redis/redis-client";
 import { logger } from "../logger/logger";
+import { flushSentry } from "../observability/sentry";
 
 export interface GracefulShutdownOptions {
   server: Server;
@@ -30,6 +31,7 @@ export function registerGracefulShutdown({
       }
 
       await closeRedisClient(redisClient);
+      await flushSentry();
       logger.info("Graceful shutdown complete");
       process.exit(0);
     });
