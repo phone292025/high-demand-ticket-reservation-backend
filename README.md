@@ -54,7 +54,7 @@ https://your-name.int.yt/docs
 https://sentry-your-name.int.yt
 ```
 
-Production `.env` stays only on EC2. GitHub Actions only pulls code, backs up the SQLite file, rebuilds containers, and runs migrations. Real secrets are not committed.
+Production `.env` stays only on EC2. GitHub Actions runs build/test on every push. EC2 deployment is manual from the GitHub Actions page, so it will not fail or create cloud expectations when no paid EC2 server exists.
 
 The API Docker Compose file binds the Node API to `127.0.0.1:3000` and keeps Redis private inside Docker. Nginx is the public entrypoint for HTTPS traffic.
 
