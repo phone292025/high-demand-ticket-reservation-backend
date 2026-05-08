@@ -60,6 +60,7 @@ export function createApp(
 
   app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
   app.use("/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+  app.use("/api/v1/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
   app.get("/api-docs.json", (_request, response) => {
     response.json(swaggerSpec);
   });
@@ -89,7 +90,8 @@ export function createApp(
           "POST /api/v1/tickets/:ticketId/purchase-pessimistic",
         cleanup: "POST /cleanup",
         cleanupV1: "POST /api/v1/cleanup",
-        docs: "GET /docs"
+        docs: "GET /api-docs",
+        docsV1: "GET /api/v1/docs"
       }
     });
   };

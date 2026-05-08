@@ -30,7 +30,8 @@ Production aliases are also available locally:
 ```text
 http://localhost:3000/api/v1
 http://localhost:3000/api/v1/health
-http://localhost:3000/docs
+http://localhost:3000/api/v1/docs
+http://localhost:3000/api-docs
 ```
 
 ## Render Free Demo

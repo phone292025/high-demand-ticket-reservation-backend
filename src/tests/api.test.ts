@@ -92,6 +92,7 @@ describe("High-demand ticket reservation API", () => {
   it("serves health and Swagger through production aliases", async () => {
     await request(app).get("/api/v1/health").expect(200);
     await request(app).get("/docs/").expect(200);
+    await request(app).get("/api/v1/docs/").expect(200);
   });
 
   it("maps malformed JSON through the global error middleware", async () => {
