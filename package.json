@@ -4,7 +4,8 @@
   "description": "High-demand concert ticket reservation backend with TypeORM transactions and SQLite migrations.",
   "main": "dist/server.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && npm run copy:public",
+    "copy:public": "node -e \"require('fs').cpSync('src/public','dist/public',{recursive:true})\"",
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "start": "node dist/server.js",
     "typeorm": "typeorm-ts-node-commonjs -d src/data-source.ts",
@@ -29,6 +30,7 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "express-rate-limit": "^8.4.1",
+    "firebase-admin": "^13.10.0",
     "pino": "^10.3.1",
     "rate-limit-redis": "^4.3.1",
     "redis": "^5.12.1",

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">Ticket Hold Desk icon</title>
+  <rect width="128" height="128" rx="30" fill="#0f172a"/>
+  <path d="M28 44c0-7.7 6.3-14 14-14h44c7.7 0 14 6.3 14 14v9.5c-5.8 1.4-10 6.6-10 12.5s4.2 11.1 10 12.5V84c0 7.7-6.3 14-14 14H42c-7.7 0-14-6.3-14-14v-5.5c5.8-1.4 10-6.6 10-12.5s-4.2-11.1-10-12.5V44z" fill="#f8fafc"/>
+  <path d="M50 42h28M50 64h28M50 86h18" stroke="#0f766e" stroke-width="8" stroke-linecap="round"/>
+</svg>

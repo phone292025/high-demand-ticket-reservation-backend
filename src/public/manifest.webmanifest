@@ -1,0 +1,18 @@
+{
+  "name": "Ticket Hold Desk",
+  "short_name": "Ticket Desk",
+  "description": "Reserve high-demand concert tickets with Google Sign-In, FCM reminders, and offline browsing.",
+  "start_url": "/app/",
+  "scope": "/app/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#0f172a",
+  "icons": [
+    {
+      "src": "/app/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

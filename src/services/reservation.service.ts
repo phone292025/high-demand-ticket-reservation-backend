@@ -3,6 +3,8 @@ import { Concert } from "../entities/Concert";
 import { Ticket } from "../entities/Ticket";
 import { TicketStatus } from "../entities/TicketStatus";
 import { AppError } from "../errors/AppError";
+import { logger } from "../logger/logger";
+import { NotificationService } from "./notification.service";
 import { reservationExpiry } from "../utils/date";
 import { runWriteTransaction } from "../utils/transaction";
 
@@ -18,7 +20,10 @@ export interface ReservationOptions {
 }
 
 export class ReservationService {
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly notificationService?: NotificationService
+  ) {}
 
   async reserveTickets(
     input: ReserveTicketInput,
@@ -26,7 +31,7 @@ export class ReservationService {
   ): Promise<Ticket> {
     this.validateInput(input);
 
-    return runWriteTransaction(this.dataSource, async (queryRunner) => {
+    const ticket = await runWriteTransaction(this.dataSource, async (queryRunner) => {
       const updateResult = await queryRunner.manager
         .createQueryBuilder()
         .update(Concert)
@@ -60,6 +65,16 @@ export class ReservationService {
 
       return queryRunner.manager.save(Ticket, ticket);
     });
+
+    if (this.notificationService) {
+      await this.notificationService
+        .scheduleExpirationWarning(ticket)
+        .catch((error) => {
+          logger.error({ error, ticketId: ticket.id }, "Failed to schedule FCM warning");
+        });
+    }
+
+    return ticket;
   }
 
   async reserveTicket(

@@ -1,7 +1,12 @@
 import express, { NextFunction, Request, Response } from "express";
+import path from "node:path";
 import swaggerUi from "swagger-ui-express";
 import { DataSource } from "typeorm";
 import { RedisClientType } from "redis";
+import {
+  FirebaseAuthVerifier,
+  getPublicFirebaseConfig
+} from "./auth/firebase-admin";
 import { Concert } from "./entities/Concert";
 import { Ticket } from "./entities/Ticket";
 import { swaggerSpec } from "./docs/swagger";
@@ -9,14 +14,22 @@ import { toTicketDto, toTicketDtos } from "./dto/ticket.dto";
 import { AppError, ConcurrencyError } from "./errors/AppError";
 import { errorMiddleware } from "./middleware/error.middleware";
 import { correlationIdMiddleware } from "./middleware/correlation-id.middleware";
+import {
+  AuthenticatedRequest,
+  requireFirebaseAuth
+} from "./middleware/firebase-auth.middleware";
 import { createReservationRateLimiter } from "./middleware/rate-limit.middleware";
 import { requestLoggerMiddleware } from "./middleware/request-logger.middleware";
 import { validateBody } from "./middleware/validate.middleware";
 import { logger } from "./logger/logger";
 import { CleanupService } from "./services/cleanup.service";
+import { NotificationService } from "./services/notification.service";
 import { PurchaseService } from "./services/purchase.service";
 import { ReservationService } from "./services/reservation.service";
 import {
+  authenticatedPurchaseTicketSchema,
+  authenticatedReserveTicketSchema,
+  fcmTokenSchema,
   purchaseByRouteSchema,
   purchaseTicketSchema,
   reserveTicketSchema
@@ -38,6 +51,8 @@ export interface CreateAppOptions {
   enableRateLimit?: boolean;
   redisClient?: RedisClientType;
   rateLimitPrefix?: string;
+  firebaseAuthVerifier?: FirebaseAuthVerifier;
+  notificationService?: NotificationService;
 }
 
 export function createApp(
@@ -45,9 +60,15 @@ export function createApp(
   options: CreateAppOptions = {}
 ) {
   const app = express();
-  const reservationService = new ReservationService(dataSource);
+  const notificationService =
+    options.notificationService ?? new NotificationService(dataSource);
+  const reservationService = new ReservationService(
+    dataSource,
+    notificationService
+  );
   const purchaseService = new PurchaseService(dataSource);
   const cleanupService = new CleanupService(dataSource);
+  const firebaseAuth = requireFirebaseAuth(options.firebaseAuthVerifier);
   const shouldEnableRateLimit = options.enableRateLimit ?? false;
   const reservationRateLimiter =
     shouldEnableRateLimit && options.redisClient
@@ -57,6 +78,10 @@ export function createApp(
   app.use(correlationIdMiddleware);
   app.use(requestLoggerMiddleware);
   app.use(express.json());
+
+  const publicPath = path.join(__dirname, "public");
+  app.get("/app", (_request, response) => response.redirect("/app/"));
+  app.use("/app", express.static(publicPath));
 
   app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
   app.use("/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
@@ -90,6 +115,10 @@ export function createApp(
           "POST /api/v1/tickets/:ticketId/purchase-pessimistic",
         cleanup: "POST /cleanup",
         cleanupV1: "POST /api/v1/cleanup",
+        app: "GET /app",
+        firebaseConfig: "GET /api/v1/firebase-config",
+        myTickets: "GET /api/v1/me/tickets",
+        fcmTokens: "POST /api/v1/me/fcm-tokens",
         docs: "GET /api-docs",
         docsV1: "GET /api/v1/docs"
       }
@@ -105,6 +134,10 @@ export function createApp(
 
   app.get("/health", healthHandler);
   app.get("/api/v1/health", healthHandler);
+
+  app.get("/api/v1/firebase-config", (_request, response) => {
+    response.json(getPublicFirebaseConfig());
+  });
 
   const concertsHandler = asyncHandler(async (_request, response) => {
       const concerts = await dataSource.getRepository(Concert).find({
@@ -206,9 +239,17 @@ export function createApp(
   );
   app.post(
     "/api/v1/reserve",
+    firebaseAuth,
     reservationRateLimiter,
-    validateBody(reserveTicketSchema),
-    reserveHandler
+    validateBody(authenticatedReserveTicketSchema),
+    asyncHandler(async (request, response) => {
+      const authRequest = request as AuthenticatedRequest;
+      const ticket = await reservationService.reserveTickets({
+        ...request.body,
+        userId: authRequest.authUser.uid
+      });
+      response.status(201).json({ ticket: toTicketDto(ticket) });
+    })
   );
 
   app.post(
@@ -219,9 +260,17 @@ export function createApp(
   );
   app.post(
     "/api/v1/tickets",
+    firebaseAuth,
     reservationRateLimiter,
-    validateBody(reserveTicketSchema),
-    reserveHandler
+    validateBody(authenticatedReserveTicketSchema),
+    asyncHandler(async (request, response) => {
+      const authRequest = request as AuthenticatedRequest;
+      const ticket = await reservationService.reserveTickets({
+        ...request.body,
+        userId: authRequest.authUser.uid
+      });
+      response.status(201).json({ ticket: toTicketDto(ticket) });
+    })
   );
 
   const purchaseHandler = asyncHandler(async (request, response) => {
@@ -232,8 +281,16 @@ export function createApp(
   app.post("/purchase", validateBody(purchaseTicketSchema), purchaseHandler);
   app.post(
     "/api/v1/purchase",
-    validateBody(purchaseTicketSchema),
-    purchaseHandler
+    firebaseAuth,
+    validateBody(authenticatedPurchaseTicketSchema),
+    asyncHandler(async (request, response) => {
+      const authRequest = request as AuthenticatedRequest;
+      const ticket = await purchaseService.purchaseTicket({
+        ticketId: request.body.ticketId,
+        userId: authRequest.authUser.uid
+      });
+      response.json({ ticket: toTicketDto(ticket) });
+    })
   );
 
   /**
@@ -274,12 +331,14 @@ export function createApp(
   );
   app.post(
     "/api/v1/tickets/:ticketId/purchase-optimistic",
-    validateBody(purchaseByRouteSchema),
+    firebaseAuth,
+    validateBody(authenticatedPurchaseTicketSchema.omit({ ticketId: true })),
     asyncHandler(async (request, response) => {
+      const authRequest = request as AuthenticatedRequest;
       const ticketId = Number(request.params.ticketId);
       const ticket = await purchaseService.purchaseTicketOptimistic({
         ticketId,
-        userId: request.body.userId
+        userId: authRequest.authUser.uid
       });
 
       response.json({ ticket: toTicketDto(ticket) });
@@ -324,15 +383,85 @@ export function createApp(
   );
   app.post(
     "/api/v1/tickets/:ticketId/purchase-pessimistic",
-    validateBody(purchaseByRouteSchema),
+    firebaseAuth,
+    validateBody(authenticatedPurchaseTicketSchema.omit({ ticketId: true })),
     asyncHandler(async (request, response) => {
+      const authRequest = request as AuthenticatedRequest;
       const ticketId = Number(request.params.ticketId);
       const ticket = await purchaseService.purchaseTicketPessimistic({
         ticketId,
-        userId: request.body.userId
+        userId: authRequest.authUser.uid
       });
 
       response.json({ ticket: toTicketDto(ticket) });
+    })
+  );
+
+  /**
+   * @openapi
+   * /me/tickets:
+   *   get:
+   *     summary: List tickets owned by the authenticated Firebase user.
+   *     security:
+   *       - FirebaseBearerAuth: []
+   *     responses:
+   *       200:
+   *         description: Ticket DTOs for the current user.
+   *       401:
+   *         description: Missing or invalid Firebase token.
+   */
+  app.get(
+    "/api/v1/me/tickets",
+    firebaseAuth,
+    asyncHandler(async (request, response) => {
+      const authRequest = request as AuthenticatedRequest;
+      const tickets = await dataSource.getRepository(Ticket).find({
+        where: { userId: authRequest.authUser.uid },
+        order: { id: "ASC" }
+      });
+
+      response.json(toTicketDtos(tickets));
+    })
+  );
+
+  /**
+   * @openapi
+   * /me/fcm-tokens:
+   *   post:
+   *     summary: Register this browser's Firebase Cloud Messaging token.
+   *     security:
+   *       - FirebaseBearerAuth: []
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             $ref: '#/components/schemas/FcmTokenRequest'
+   *     responses:
+   *       201:
+   *         description: FCM token registered.
+   *       401:
+   *         description: Missing or invalid Firebase token.
+   */
+  app.post(
+    "/api/v1/me/fcm-tokens",
+    firebaseAuth,
+    validateBody(fcmTokenSchema),
+    asyncHandler(async (request, response) => {
+      const authRequest = request as AuthenticatedRequest;
+      const token = await notificationService.registerFcmToken(
+        authRequest.authUser.uid,
+        request.body.token
+      );
+
+      response.status(201).json({
+        token: {
+          id: token.id,
+          userId: token.userId,
+          createdAt: token.createdAt,
+          updatedAt: token.updatedAt
+        }
+      });
     })
   );
 

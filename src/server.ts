@@ -1,11 +1,20 @@
 import "dotenv/config";
 import { AppDataSource, initializeDataSource } from "./data-source";
 import { createApp } from "./app";
+import {
+  createFirebaseAuthVerifier,
+  getFirebaseMessagingOrUndefined
+} from "./auth/firebase-admin";
 import { registerGracefulShutdown } from "./operations/graceful-shutdown";
+import { startNotificationWorker } from "./operations/notification-worker";
 import { createRedisClient } from "./redis/redis-client";
 import { logger } from "./logger/logger";
 import { initializeSentry } from "./observability/sentry";
 import { seedConcerts } from "./scripts/seed";
+import {
+  FirebaseNotificationSender,
+  NotificationService
+} from "./services/notification.service";
 
 const port = Number(process.env.PORT ?? 3000);
 
@@ -44,9 +53,19 @@ async function bootstrap() {
     );
   }
 
+  const firebaseAuthVerifier = createFirebaseAuthVerifier();
+  const firebaseMessaging = getFirebaseMessagingOrUndefined();
+  const notificationService = new NotificationService(
+    AppDataSource,
+    firebaseMessaging ? new FirebaseNotificationSender(firebaseMessaging) : undefined
+  );
+  const notificationWorker = startNotificationWorker(notificationService);
+
   const app = createApp(AppDataSource, {
     enableRateLimit: Boolean(redisClient),
-    redisClient
+    redisClient,
+    firebaseAuthVerifier,
+    notificationService
   });
 
   const server = app.listen(port, () => {
@@ -57,7 +76,8 @@ async function bootstrap() {
     server,
     dataSource: AppDataSource,
     redisClient,
-    waitMs: 5000
+    waitMs: 5000,
+    onShutdown: [() => notificationWorker.stop()]
   });
 }
 

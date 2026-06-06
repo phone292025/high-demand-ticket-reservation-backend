@@ -19,6 +19,13 @@ export const swaggerSpec = swaggerJSDoc({
       }
     ],
     components: {
+      securitySchemes: {
+        FirebaseBearerAuth: {
+          type: "http",
+          scheme: "bearer",
+          bearerFormat: "Firebase ID token"
+        }
+      },
       schemas: {
         ReserveRequest: {
           type: "object",
@@ -29,6 +36,43 @@ export const swaggerSpec = swaggerJSDoc({
             userId: { type: "string", example: "user_123" },
             category: { type: "string", example: "General" },
             quantity: { type: "integer", minimum: 1, maximum: 5, example: 1 }
+          }
+        },
+        AuthenticatedReserveRequest: {
+          type: "object",
+          required: ["concertId", "quantity"],
+          additionalProperties: false,
+          properties: {
+            concertId: { type: "integer", example: 1 },
+            category: { type: "string", example: "General" },
+            quantity: { type: "integer", minimum: 1, maximum: 5, example: 1 }
+          }
+        },
+        AuthenticatedPurchaseRequest: {
+          type: "object",
+          required: ["ticketId"],
+          additionalProperties: false,
+          properties: {
+            ticketId: { type: "integer", example: 1 }
+          }
+        },
+        FcmTokenRequest: {
+          type: "object",
+          required: ["token"],
+          additionalProperties: false,
+          properties: {
+            token: { type: "string", example: "fcm-registration-token" }
+          }
+        },
+        FirebaseConfig: {
+          type: "object",
+          properties: {
+            apiKey: { type: "string" },
+            authDomain: { type: "string" },
+            projectId: { type: "string" },
+            messagingSenderId: { type: "string" },
+            appId: { type: "string" },
+            vapidKey: { type: "string" }
           }
         },
         PurchaseRequest: {

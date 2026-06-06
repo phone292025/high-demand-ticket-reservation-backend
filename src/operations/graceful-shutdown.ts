@@ -10,13 +10,15 @@ export interface GracefulShutdownOptions {
   dataSource: DataSource;
   redisClient?: RedisClientType;
   waitMs?: number;
+  onShutdown?: Array<() => void | Promise<void>>;
 }
 
 export function registerGracefulShutdown({
   server,
   dataSource,
   redisClient,
-  waitMs = 5000
+  waitMs = 5000,
+  onShutdown = []
 }: GracefulShutdownOptions) {
   process.on("SIGTERM", async () => {
     logger.info("SIGTERM received");
@@ -31,6 +33,9 @@ export function registerGracefulShutdown({
       }
 
       await closeRedisClient(redisClient);
+      for (const shutdownTask of onShutdown) {
+        await shutdownTask();
+      }
       await flushSentry();
       logger.info("Graceful shutdown complete");
       process.exit(0);

@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0f172a" />
+    <title>Ticket Hold Desk</title>
+    <link rel="manifest" href="/app/manifest.webmanifest" />
+    <link rel="icon" href="/app/icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/app/styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <nav class="topbar" aria-label="Application navigation">
+          <a class="brand" href="/app/">
+            <span class="brand-mark" aria-hidden="true"></span>
+            <span>Ticket Hold Desk</span>
+          </a>
+          <div class="session-panel">
+            <span id="connectionStatus" class="status-pill">Checking network</span>
+            <button id="installButton" class="ghost-button" type="button" hidden>
+              Install app
+            </button>
+            <button id="signInButton" class="primary-button" type="button">
+              Sign in with Google
+            </button>
+            <button id="signOutButton" class="ghost-button" type="button" hidden>
+              Sign out
+            </button>
+          </div>
+        </nav>
+
+        <section class="hero-grid">
+          <div>
+            <p class="eyebrow">High-demand concert reservations</p>
+            <h1>Hold the ticket, finish the purchase, keep the stock honest.</h1>
+            <p class="hero-copy">
+              Sign in with Google, reserve from live stock, get expiry reminders,
+              and keep browsing your last loaded data even when the network drops.
+            </p>
+          </div>
+          <aside class="signal-card" aria-label="Reservation flow summary">
+            <div>
+              <span class="metric-label">Reservation window</span>
+              <strong>5 min</strong>
+            </div>
+            <div>
+              <span class="metric-label">Reminder timing</span>
+              <strong>1 min left</strong>
+            </div>
+            <div>
+              <span class="metric-label">Offline mode</span>
+              <strong>Browse only</strong>
+            </div>
+          </aside>
+        </section>
+      </header>
+
+      <main>
+        <section id="alert" class="alert" role="status" aria-live="polite" hidden></section>
+
+        <section class="dashboard-grid" aria-label="Ticket dashboard">
+          <article class="panel concerts-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Browse</p>
+                <h2>Concerts</h2>
+              </div>
+              <button id="refreshButton" class="ghost-button" type="button">Refresh</button>
+            </div>
+            <div id="concertsList" class="list-zone" aria-live="polite"></div>
+          </article>
+
+          <article class="panel action-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Reserve</p>
+                <h2>New hold</h2>
+              </div>
+            </div>
+            <form id="reserveForm" class="stacked-form">
+              <label>
+                <span>Concert</span>
+                <select id="concertSelect" name="concertId" required></select>
+              </label>
+              <label>
+                <span>Category</span>
+                <input id="categoryInput" name="category" value="General" />
+              </label>
+              <label>
+                <span>Quantity</span>
+                <input id="quantityInput" name="quantity" type="number" min="1" max="5" value="1" required />
+              </label>
+              <button id="reserveButton" class="primary-button wide" type="submit">
+                Reserve tickets
+              </button>
+              <p class="helper-text">
+                Authenticated reservations use your Firebase UID on the backend.
+              </p>
+            </form>
+
+            <div class="notification-box">
+              <p class="eyebrow">Notifications</p>
+              <p>
+                Register this browser for Firebase Cloud Messaging so expiry warnings
+                can reach you before a hold runs out.
+              </p>
+              <button id="notificationButton" class="ghost-button wide" type="button">
+                Enable reminders
+              </button>
+            </div>
+          </article>
+
+          <article class="panel tickets-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Signed-in user</p>
+                <h2>My tickets</h2>
+              </div>
+            </div>
+            <div id="ticketsList" class="list-zone" aria-live="polite"></div>
+          </article>
+        </section>
+      </main>
+    </div>
+
+    <script src="/app/app.js"></script>
+  </body>
+</html>

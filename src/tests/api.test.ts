@@ -1,23 +1,59 @@
 import request from "supertest";
 import { DataSource, In } from "typeorm";
 import { createApp } from "../app";
+import { FirebaseAuthVerifier, FirebaseUser } from "../auth/firebase-admin";
 import { createDataSource, initializeDataSource } from "../data-source";
 import { Concert } from "../entities/Concert";
+import { FcmToken } from "../entities/FcmToken";
 import { Ticket } from "../entities/Ticket";
+import {
+  TicketNotification,
+  TicketNotificationStatus
+} from "../entities/TicketNotification";
 import { TicketStatus } from "../entities/TicketStatus";
 import { seedConcerts } from "../scripts/seed";
+import {
+  NotificationSender,
+  NotificationService
+} from "../services/notification.service";
 import { ReservationService } from "../services/reservation.service";
 
 describe("High-demand ticket reservation API", () => {
   let dataSource: DataSource;
   let app: ReturnType<typeof createApp>;
+  let notificationSender: jest.Mocked<NotificationSender>;
+  let notificationService: NotificationService;
+  let firebaseAuthVerifier: jest.Mocked<FirebaseAuthVerifier>;
+
+  const firebaseUsers: Record<string, FirebaseUser> = {
+    owner_token: { uid: "firebase_owner", email: "owner@example.test" },
+    other_token: { uid: "firebase_other", email: "other@example.test" }
+  };
 
   beforeEach(async () => {
     dataSource = createDataSource(":memory:");
     await initializeDataSource(dataSource);
     await dataSource.runMigrations();
     await seedConcerts(dataSource);
-    app = createApp(dataSource);
+    notificationSender = {
+      sendToTokens: jest.fn().mockResolvedValue(undefined)
+    };
+    notificationService = new NotificationService(dataSource, notificationSender);
+    firebaseAuthVerifier = {
+      verifyIdToken: jest.fn(async (idToken: string) => {
+        const user = firebaseUsers[idToken];
+
+        if (!user) {
+          throw new Error("Invalid token");
+        }
+
+        return user;
+      })
+    };
+    app = createApp(dataSource, {
+      firebaseAuthVerifier,
+      notificationService
+    });
   });
 
   afterEach(async () => {
@@ -42,6 +78,10 @@ describe("High-demand ticket reservation API", () => {
     return request(app)
       .post("/reserve")
       .send({ concertId, userId, category: "General", quantity });
+  }
+
+  function authenticatedRequest(token = "owner_token") {
+    return request(app).post("/api/v1/reserve").set("Authorization", `Bearer ${token}`);
   }
 
   it("returns health status with a generated correlation id", async () => {
@@ -85,7 +125,9 @@ describe("High-demand ticket reservation API", () => {
       ticketsV1: "GET /api/v1/tickets",
       reserveV1: "POST /api/v1/reserve",
       purchaseV1: "POST /api/v1/purchase",
-      cleanupV1: "POST /api/v1/cleanup"
+      cleanupV1: "POST /api/v1/cleanup",
+      myTickets: "GET /api/v1/me/tickets",
+      fcmTokens: "POST /api/v1/me/fcm-tokens"
     });
   });
 
@@ -93,6 +135,12 @@ describe("High-demand ticket reservation API", () => {
     await request(app).get("/api/v1/health").expect(200);
     await request(app).get("/docs/").expect(200);
     await request(app).get("/api/v1/docs/").expect(200);
+  });
+
+  it("serves the Offline PWA shell and manifest", async () => {
+    await request(app).get("/app/index.html").expect(200);
+    await request(app).get("/app/manifest.webmanifest").expect(200);
+    await request(app).get("/app/sw.js").expect(200);
   });
 
   it("maps malformed JSON through the global error middleware", async () => {
@@ -237,11 +285,9 @@ describe("High-demand ticket reservation API", () => {
   it("uses the same reservation behavior through POST /api/v1/reserve", async () => {
     const concert = await createConcert(2);
 
-    const response = await request(app)
-      .post("/api/v1/reserve")
+    const response = await authenticatedRequest()
       .send({
         concertId: concert.id,
-        userId: "api_v1_user",
         category: "General",
         quantity: 2
       })
@@ -251,8 +297,44 @@ describe("High-demand ticket reservation API", () => {
       .getRepository(Concert)
       .findOneByOrFail({ id: concert.id });
 
-    expect(response.body.ticket.quantity).toBe(2);
+    expect(response.body.ticket).toMatchObject({
+      quantity: 2,
+      userId: "firebase_owner"
+    });
     expect(updatedConcert.availableStock).toBe(0);
+  });
+
+  it("rejects authenticated reservation when the Firebase token is missing", async () => {
+    const concert = await createConcert(1);
+
+    const response = await request(app)
+      .post("/api/v1/reserve")
+      .send({ concertId: concert.id, category: "General", quantity: 1 })
+      .expect(401);
+
+    expect(response.body.error).toBe("UNAUTHORIZED");
+  });
+
+  it("rejects authenticated reservation when the authorization header is malformed", async () => {
+    const concert = await createConcert(1);
+
+    const response = await request(app)
+      .post("/api/v1/reserve")
+      .set("Authorization", "Token owner_token")
+      .send({ concertId: concert.id, category: "General", quantity: 1 })
+      .expect(401);
+
+    expect(response.body.error).toBe("UNAUTHORIZED");
+  });
+
+  it("rejects authenticated reservation when Firebase rejects the token", async () => {
+    const concert = await createConcert(1);
+
+    const response = await authenticatedRequest("bad_token")
+      .send({ concertId: concert.id, category: "General", quantity: 1 })
+      .expect(401);
+
+    expect(response.body.error).toBe("UNAUTHORIZED");
   });
 
   it("rejects reservation when concert is sold out", async () => {
@@ -377,6 +459,165 @@ describe("High-demand ticket reservation API", () => {
       .expect(200);
 
     expect(purchaseResponse.body.ticket.status).toBe(TicketStatus.Completed);
+  });
+
+  it("purchases through /api/v1/purchase with the Firebase uid", async () => {
+    const concert = await createConcert(1);
+    const reserveResponse = await authenticatedRequest()
+      .send({ concertId: concert.id, category: "General", quantity: 1 })
+      .expect(201);
+
+    await request(app)
+      .post("/api/v1/purchase")
+      .set("Authorization", "Bearer other_token")
+      .send({ ticketId: reserveResponse.body.ticket.id })
+      .expect(409);
+
+    const purchaseResponse = await request(app)
+      .post("/api/v1/purchase")
+      .set("Authorization", "Bearer owner_token")
+      .send({ ticketId: reserveResponse.body.ticket.id })
+      .expect(200);
+
+    expect(purchaseResponse.body.ticket.status).toBe(TicketStatus.Completed);
+  });
+
+  it("purchases through the authenticated route purchase endpoint without userId", async () => {
+    const concert = await createConcert(1);
+    const reserveResponse = await authenticatedRequest()
+      .send({ concertId: concert.id, category: "General", quantity: 1 })
+      .expect(201);
+
+    const response = await request(app)
+      .post(`/api/v1/tickets/${reserveResponse.body.ticket.id}/purchase-optimistic`)
+      .set("Authorization", "Bearer owner_token")
+      .send({})
+      .expect(200);
+
+    expect(response.body.ticket.userId).toBe("firebase_owner");
+  });
+
+  it("returns only the signed-in user's tickets", async () => {
+    const concert = await createConcert(2);
+    await authenticatedRequest()
+      .send({ concertId: concert.id, category: "General", quantity: 1 })
+      .expect(201);
+    await authenticatedRequest("other_token")
+      .send({ concertId: concert.id, category: "General", quantity: 1 })
+      .expect(201);
+
+    const response = await request(app)
+      .get("/api/v1/me/tickets")
+      .set("Authorization", "Bearer owner_token")
+      .expect(200);
+
+    expect(response.body).toEqual([
+      expect.objectContaining({ userId: "firebase_owner" })
+    ]);
+  });
+
+  it("upserts FCM tokens for the signed-in user", async () => {
+    const token = "fcm-token-value-with-enough-length";
+
+    await request(app)
+      .post("/api/v1/me/fcm-tokens")
+      .set("Authorization", "Bearer owner_token")
+      .send({ token })
+      .expect(201);
+    await request(app)
+      .post("/api/v1/me/fcm-tokens")
+      .set("Authorization", "Bearer other_token")
+      .send({ token })
+      .expect(201);
+
+    const tokens = await dataSource.getRepository(FcmToken).find();
+
+    expect(tokens).toEqual([
+      expect.objectContaining({ token, userId: "firebase_other" })
+    ]);
+  });
+
+  it("schedules an expiration warning after an authenticated reservation", async () => {
+    const concert = await createConcert(1);
+    const reserveResponse = await authenticatedRequest()
+      .send({ concertId: concert.id, category: "General", quantity: 1 })
+      .expect(201);
+
+    const notification = await dataSource
+      .getRepository(TicketNotification)
+      .findOneByOrFail({ ticketId: reserveResponse.body.ticket.id });
+
+    expect(notification.status).toBe(TicketNotificationStatus.Pending);
+  });
+
+  it("skips expiry notification when the ticket is already completed", async () => {
+    const concert = await createConcert(1);
+    const ticket = await dataSource.getRepository(Ticket).save(
+      dataSource.getRepository(Ticket).create({
+        concertId: concert.id,
+        userId: "firebase_owner",
+        status: TicketStatus.Completed,
+        expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+        category: "General",
+        quantity: 1
+      })
+    );
+    const notification = await dataSource.getRepository(TicketNotification).save(
+      dataSource.getRepository(TicketNotification).create({
+        ticketId: ticket.id,
+        userId: "firebase_owner",
+        notifyAt: new Date("2020-01-01T00:00:00.000Z"),
+        status: TicketNotificationStatus.Pending
+      })
+    );
+
+    await notificationService.processDueExpirationWarnings(
+      new Date("2026-01-01T00:00:00.000Z")
+    );
+    const reloadedNotification = await dataSource
+      .getRepository(TicketNotification)
+      .findOneByOrFail({ id: notification.id });
+
+    expect(reloadedNotification.status).toBe(TicketNotificationStatus.Skipped);
+  });
+
+  it("sends expiry notification to registered FCM tokens for pending tickets", async () => {
+    const concert = await createConcert(1);
+    const ticket = await dataSource.getRepository(Ticket).save(
+      dataSource.getRepository(Ticket).create({
+        concertId: concert.id,
+        userId: "firebase_owner",
+        status: TicketStatus.Pending,
+        expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+        category: "General",
+        quantity: 1
+      })
+    );
+    await dataSource.getRepository(FcmToken).save(
+      dataSource.getRepository(FcmToken).create({
+        userId: "firebase_owner",
+        token: "registered-token-with-enough-length"
+      })
+    );
+    await dataSource.getRepository(TicketNotification).save(
+      dataSource.getRepository(TicketNotification).create({
+        ticketId: ticket.id,
+        userId: "firebase_owner",
+        notifyAt: new Date("2020-01-01T00:00:00.000Z"),
+        status: TicketNotificationStatus.Pending
+      })
+    );
+
+    await notificationService.processDueExpirationWarnings(
+      new Date("2026-01-01T00:00:00.000Z")
+    );
+
+    expect(notificationSender.sendToTokens).toHaveBeenCalledWith(
+      ["registered-token-with-enough-length"],
+      expect.objectContaining({
+        title: "Reservation expiring soon"
+      })
+    );
   });
 
   it("rejects purchase for an expired pending ticket", async () => {

@@ -25,6 +25,12 @@ The API runs on:
 http://localhost:3000
 ```
 
+The assignment web app is served by the same Express server:
+
+```text
+http://localhost:3000/app
+```
+
 Production aliases are also available locally:
 
 ```text
@@ -33,6 +39,41 @@ http://localhost:3000/api/v1/health
 http://localhost:3000/api/v1/docs
 http://localhost:3000/api-docs
 ```
+
+## Firebase, Google Sign-In, FCM, And PWA
+
+This repo now includes a vanilla Offline PWA in `src/public`. It demonstrates:
+
+- Google Sign-In with Firebase Auth
+- Firebase Cloud Messaging browser token registration
+- installable PWA manifest and service worker
+- cached app shell, cached concerts, and cached signed-in user tickets for offline browsing
+- disabled reserve/purchase buttons while offline, so write actions are not replayed later
+
+Create a Firebase project, enable Google as a sign-in provider, create a Web app, and enable Cloud Messaging. Add your local and deployed domains to Firebase Auth authorized domains.
+
+Set the browser-safe Firebase web config and private Admin SDK credentials in `.env`:
+
+```text
+FIREBASE_WEB_API_KEY=
+FIREBASE_AUTH_DOMAIN=
+FIREBASE_PROJECT_ID=
+FIREBASE_MESSAGING_SENDER_ID=
+FIREBASE_APP_ID=
+FIREBASE_VAPID_KEY=
+FIREBASE_CLIENT_EMAIL=
+FIREBASE_PRIVATE_KEY=
+```
+
+Keep `FIREBASE_CLIENT_EMAIL` and `FIREBASE_PRIVATE_KEY` only in `.env`, Render secrets, or EC2 secret storage. Do not commit real Firebase Admin credentials.
+
+Authenticated `/api/v1` user-action routes verify a Firebase ID token from:
+
+```http
+Authorization: Bearer <firebase-id-token>
+```
+
+Those routes derive `userId` from the Firebase UID. The older demo routes such as `POST /reserve` and `POST /purchase` still accept `userId` in the body for compatibility with the proof scripts.
 
 ## Render Free Demo
 
@@ -199,7 +240,12 @@ GET /health
     "purchasePessimisticV1": "POST /api/v1/tickets/:ticketId/purchase-pessimistic",
     "cleanup": "POST /cleanup",
     "cleanupV1": "POST /api/v1/cleanup",
-    "docs": "GET /docs"
+    "app": "GET /app",
+    "firebaseConfig": "GET /api/v1/firebase-config",
+    "myTickets": "GET /api/v1/me/tickets",
+    "fcmTokens": "POST /api/v1/me/fcm-tokens",
+    "docs": "GET /api-docs",
+    "docsV1": "GET /api/v1/docs"
   }
 }
 ```
@@ -225,12 +271,16 @@ GET /api/v1
 GET /api/v1/health
 GET /api/v1/concerts
 GET /api/v1/tickets
+GET /api/v1/me/tickets
+GET /api/v1/firebase-config
 POST /api/v1/reserve
 POST /api/v1/tickets
 POST /api/v1/purchase
 POST /api/v1/tickets/:ticketId/purchase-optimistic
 POST /api/v1/tickets/:ticketId/purchase-pessimistic
+POST /api/v1/me/fcm-tokens
 POST /api/v1/cleanup
+GET /app
 GET /docs
 ```
 
@@ -283,6 +333,34 @@ Purchase response:
   }
 }
 ```
+
+Authenticated reserve request for `POST /api/v1/reserve`:
+
+```json
+{
+  "concertId": 1,
+  "category": "VIP",
+  "quantity": 2
+}
+```
+
+Authenticated purchase request for `POST /api/v1/purchase`:
+
+```json
+{
+  "ticketId": 1
+}
+```
+
+Register a browser for FCM reminders:
+
+```json
+{
+  "token": "firebase-cloud-messaging-registration-token"
+}
+```
+
+Pending reservations create a notification record. The server worker checks due records every 30 seconds and sends an FCM reminder about one minute before `expiresAt`. Completed or expired tickets are skipped.
 
 Cleanup response:
 
@@ -451,10 +529,13 @@ Schema changes are handled by migrations in `src/migrations`:
 1. `1710000000000-CreateConcertsAndTickets.ts`
 2. `1710000000001-AddCategoryToTicket.ts`
 3. `1710000000002-AddDay3TicketHardeningColumns.ts`
+4. `1710000000003-AddFirebasePwaNotifications.ts`
 
 The second migration adds `tickets.category DEFAULT 'General'`, showing schema evolution after the first version of the ticket table.
 
 The third migration adds `quantity`, `internal_note`, and `version` for validation, DTO safety, and optimistic locking.
+
+The fourth migration adds `fcm_tokens` and `ticket_notifications` for Firebase Cloud Messaging expiry reminders.
 
 The migrations were created through the TypeORM migration workflow instead of relying on automatic synchronization.
 
@@ -583,6 +664,10 @@ The integration tests cover:
 - optimistic and pessimistic purchase conflict handling
 - Swagger spec coverage
 - purchase ownership, status, and expiry checks
+- Firebase Auth protected user-action routes
+- per-user `GET /api/v1/me/tickets`
+- FCM token registration
+- notification scheduling, sending, and skip behavior
 - cleanup of expired pending reservations
 - cleanup stock cap so stock cannot exceed `totalStock`
 - rollback when ticket save fails
@@ -591,7 +676,7 @@ Latest test output:
 
 ```text
 Test Suites: 1 passed, 1 total
-Tests:       24 passed, 24 total
+Tests:       35 passed, 35 total
 Snapshots:   0 total
 ```
 
