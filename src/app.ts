@@ -80,7 +80,7 @@ export function createApp(
   app.use(express.json());
 
   const publicPath = path.join(__dirname, "public");
-  app.get("/app", (_request, response) => response.redirect("/app/"));
+  app.get(/^\/app$/, (_request, response) => response.redirect("/app/"));
   app.use("/app", express.static(publicPath));
 
   app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
