@@ -73,13 +73,18 @@ Authenticated `/api/v1` user-action routes verify a Firebase ID token from:
 Authorization: Bearer <firebase-id-token>
 ```
 
-Those routes derive `userId` from the Firebase UID. The older demo routes such as `POST /reserve` and `POST /purchase` still accept `userId` in the body for compatibility with the proof scripts.
+Those routes derive `userId` from the Firebase UID. The older demo routes such as `POST /reserve`, `POST /purchase`, and public all-ticket listing are disabled by default because they trust caller-supplied `userId`. Enable them only for local proof scripts with:
+
+```text
+ENABLE_LEGACY_DEMO_ROUTES=true
+ENABLE_PUBLIC_CLEANUP=true
+```
 
 ## Render Free Demo
 
 The repository includes `render.yaml` for a no-cost Render web service demo. Choose the Free instance type in Render and connect this GitHub repository.
 
-Render runs the `Dockerfile` as one web service, so it does not run the `docker-compose.yml` Redis container. For the free demo, `render.yaml` sets `ENABLE_RATE_LIMIT=false` so the API can start without a paid Redis add-on. The Redis-backed limiter is still implemented and proven locally with `npm.cmd run proof:rate-limit`. To enable it online, provide a real `REDIS_URL` from a Redis provider and set `ENABLE_RATE_LIMIT=true`.
+Render runs the `Dockerfile` as one web service, so it does not run the `docker-compose.yml` Redis container. `render.yaml` keeps `ENABLE_RATE_LIMIT=true`; without `REDIS_URL`, the API uses the built-in in-memory limiter, and with Redis it uses the Redis-backed limiter proven locally by `npm.cmd run proof:rate-limit`.
 
 The Render demo runs migrations and inserts missing seed concerts on startup:
 

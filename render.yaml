@@ -17,6 +17,10 @@ services:
       - key: SEED_ON_START
         value: "true"
       - key: ENABLE_RATE_LIMIT
+        value: "true"
+      - key: ENABLE_LEGACY_DEMO_ROUTES
+        value: "false"
+      - key: ENABLE_PUBLIC_CLEANUP
         value: "false"
       - key: TYPEORM_LOGGING
         value: "false"

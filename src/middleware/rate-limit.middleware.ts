@@ -5,18 +5,14 @@ import { AppError } from "../errors/AppError";
 import { logger } from "../logger/logger";
 
 export function createReservationRateLimiter(
-  redisClient: RedisClientType,
+  redisClient?: RedisClientType,
   prefix = "ticket-reserve-limit:"
 ) {
-  return rateLimit({
+  const limiterOptions: Parameters<typeof rateLimit>[0] = {
     windowMs: 60 * 1000,
     limit: 5,
     standardHeaders: true,
     legacyHeaders: false,
-    store: new RedisStore({
-      prefix,
-      sendCommand: (...args: string[]) => redisClient.sendCommand(args)
-    }),
     handler: (_request, _response, next) => {
       logger.warn({ error: "RATE_LIMITED" }, "Rate limit exceeded");
       next(
@@ -27,5 +23,14 @@ export function createReservationRateLimiter(
         )
       );
     }
-  });
+  };
+
+  if (redisClient) {
+    limiterOptions.store = new RedisStore({
+      prefix,
+      sendCommand: (...args: string[]) => redisClient.sendCommand(args)
+    });
+  }
+
+  return rateLimit(limiterOptions);
 }

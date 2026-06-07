@@ -51,6 +51,8 @@ describe("High-demand ticket reservation API", () => {
       })
     };
     app = createApp(dataSource, {
+      enableLegacyDemoRoutes: true,
+      enablePublicCleanup: true,
       firebaseAuthVerifier,
       notificationService
     });
@@ -129,6 +131,30 @@ describe("High-demand ticket reservation API", () => {
       myTickets: "GET /api/v1/me/tickets",
       fcmTokens: "POST /api/v1/me/fcm-tokens"
     });
+  });
+
+  it("does not expose legacy demo or public cleanup routes unless enabled", async () => {
+    const secureDefaultApp = createApp(dataSource, {
+      firebaseAuthVerifier,
+      notificationService
+    });
+
+    const indexResponse = await request(secureDefaultApp).get("/").expect(200);
+    expect(indexResponse.body.endpoints).not.toHaveProperty("tickets");
+    expect(indexResponse.body.endpoints).not.toHaveProperty("reserve");
+    expect(indexResponse.body.endpoints).not.toHaveProperty("purchase");
+    expect(indexResponse.body.endpoints).not.toHaveProperty("cleanup");
+
+    await request(secureDefaultApp).get("/api/v1/tickets").expect(404);
+    await request(secureDefaultApp)
+      .post("/reserve")
+      .send({ concertId: 1, userId: "attacker", category: "General", quantity: 1 })
+      .expect(404);
+    await request(secureDefaultApp)
+      .post("/purchase")
+      .send({ ticketId: 1, userId: "attacker" })
+      .expect(404);
+    await request(secureDefaultApp).post("/api/v1/cleanup").expect(404);
   });
 
   it("serves health and Swagger through production aliases", async () => {
@@ -535,6 +561,32 @@ describe("High-demand ticket reservation API", () => {
     expect(tokens).toEqual([
       expect.objectContaining({ token, userId: "firebase_other" })
     ]);
+  });
+
+  it("deletes only the signed-in user's FCM token", async () => {
+    const token = "fcm-token-value-with-enough-length";
+
+    await request(app)
+      .post("/api/v1/me/fcm-tokens")
+      .set("Authorization", "Bearer owner_token")
+      .send({ token })
+      .expect(201);
+
+    await request(app)
+      .delete("/api/v1/me/fcm-tokens")
+      .set("Authorization", "Bearer other_token")
+      .send({ token })
+      .expect(204);
+
+    expect(await dataSource.getRepository(FcmToken).count()).toBe(1);
+
+    await request(app)
+      .delete("/api/v1/me/fcm-tokens")
+      .set("Authorization", "Bearer owner_token")
+      .send({ token })
+      .expect(204);
+
+    expect(await dataSource.getRepository(FcmToken).count()).toBe(0);
   });
 
   it("schedules an expiration warning after an authenticated reservation", async () => {

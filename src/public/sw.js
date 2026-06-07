@@ -73,7 +73,7 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  if (url.pathname === "/api/v1/concerts" || url.pathname === "/api/v1/me/tickets") {
+  if (url.pathname === "/api/v1/concerts") {
     event.respondWith(
       fetch(request)
         .then(async (response) => {

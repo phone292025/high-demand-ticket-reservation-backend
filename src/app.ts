@@ -49,6 +49,8 @@ function asyncHandler(route: AsyncRoute) {
 
 export interface CreateAppOptions {
   enableRateLimit?: boolean;
+  enableLegacyDemoRoutes?: boolean;
+  enablePublicCleanup?: boolean;
   redisClient?: RedisClientType;
   rateLimitPrefix?: string;
   firebaseAuthVerifier?: FirebaseAuthVerifier;
@@ -70,8 +72,13 @@ export function createApp(
   const cleanupService = new CleanupService(dataSource);
   const firebaseAuth = requireFirebaseAuth(options.firebaseAuthVerifier);
   const shouldEnableRateLimit = options.enableRateLimit ?? false;
+  const enableLegacyDemoRoutes =
+    options.enableLegacyDemoRoutes ??
+    process.env.ENABLE_LEGACY_DEMO_ROUTES === "true";
+  const enablePublicCleanup =
+    options.enablePublicCleanup ?? process.env.ENABLE_PUBLIC_CLEANUP === "true";
   const reservationRateLimiter =
-    shouldEnableRateLimit && options.redisClient
+    shouldEnableRateLimit
       ? createReservationRateLimiter(options.redisClient, options.rateLimitPrefix)
       : (_request: Request, _response: Response, next: NextFunction) => next();
 
@@ -91,37 +98,50 @@ export function createApp(
   });
 
   const apiIndexHandler = (_request: Request, response: Response) => {
-    response.json({
-      name: "High-Demand Ticket Reservation Backend",
-      status: "ok",
-      endpoints: {
-        health: "GET /health",
-        healthV1: "GET /api/v1/health",
-        concerts: "GET /concerts",
-        concertsV1: "GET /api/v1/concerts",
+    const endpoints: Record<string, string> = {
+      health: "GET /health",
+      healthV1: "GET /api/v1/health",
+      concerts: "GET /concerts",
+      concertsV1: "GET /api/v1/concerts",
+      reserveV1: "POST /api/v1/reserve",
+      createTicketV1: "POST /api/v1/tickets",
+      purchaseV1: "POST /api/v1/purchase",
+      purchaseOptimisticV1:
+        "POST /api/v1/tickets/:ticketId/purchase-optimistic",
+      purchasePessimisticV1:
+        "POST /api/v1/tickets/:ticketId/purchase-pessimistic",
+      app: "GET /app",
+      firebaseConfig: "GET /api/v1/firebase-config",
+      myTickets: "GET /api/v1/me/tickets",
+      fcmTokens: "POST /api/v1/me/fcm-tokens",
+      fcmTokenDelete: "DELETE /api/v1/me/fcm-tokens",
+      docs: "GET /api-docs",
+      docsV1: "GET /api/v1/docs"
+    };
+
+    if (enableLegacyDemoRoutes) {
+      Object.assign(endpoints, {
         tickets: "GET /tickets",
         ticketsV1: "GET /api/v1/tickets",
         reserve: "POST /reserve",
-        reserveV1: "POST /api/v1/reserve",
         createTicket: "POST /tickets",
-        createTicketV1: "POST /api/v1/tickets",
         purchase: "POST /purchase",
-        purchaseV1: "POST /api/v1/purchase",
         purchaseOptimistic: "POST /tickets/:ticketId/purchase-optimistic",
-        purchaseOptimisticV1:
-          "POST /api/v1/tickets/:ticketId/purchase-optimistic",
-        purchasePessimistic: "POST /tickets/:ticketId/purchase-pessimistic",
-        purchasePessimisticV1:
-          "POST /api/v1/tickets/:ticketId/purchase-pessimistic",
+        purchasePessimistic: "POST /tickets/:ticketId/purchase-pessimistic"
+      });
+    }
+
+    if (enablePublicCleanup) {
+      Object.assign(endpoints, {
         cleanup: "POST /cleanup",
-        cleanupV1: "POST /api/v1/cleanup",
-        app: "GET /app",
-        firebaseConfig: "GET /api/v1/firebase-config",
-        myTickets: "GET /api/v1/me/tickets",
-        fcmTokens: "POST /api/v1/me/fcm-tokens",
-        docs: "GET /api-docs",
-        docsV1: "GET /api/v1/docs"
-      }
+        cleanupV1: "POST /api/v1/cleanup"
+      });
+    }
+
+    response.json({
+      name: "High-Demand Ticket Reservation Backend",
+      status: "ok",
+      endpoints
     });
   };
 
@@ -202,8 +222,10 @@ export function createApp(
       response.json(toTicketDtos(tickets));
     });
 
-  app.get("/tickets", ticketsHandler);
-  app.get("/api/v1/tickets", ticketsHandler);
+  if (enableLegacyDemoRoutes) {
+    app.get("/tickets", ticketsHandler);
+    app.get("/api/v1/tickets", ticketsHandler);
+  }
 
   const reserveHandler = asyncHandler(async (request, response) => {
     const ticket = await reservationService.reserveTickets(request.body);
@@ -231,12 +253,14 @@ export function createApp(
    *       429:
    *         description: Rate limit exceeded.
    */
-  app.post(
-    "/reserve",
-    reservationRateLimiter,
-    validateBody(reserveTicketSchema),
-    reserveHandler
-  );
+  if (enableLegacyDemoRoutes) {
+    app.post(
+      "/reserve",
+      reservationRateLimiter,
+      validateBody(reserveTicketSchema),
+      reserveHandler
+    );
+  }
   app.post(
     "/api/v1/reserve",
     firebaseAuth,
@@ -252,12 +276,14 @@ export function createApp(
     })
   );
 
-  app.post(
-    "/tickets",
-    reservationRateLimiter,
-    validateBody(reserveTicketSchema),
-    reserveHandler
-  );
+  if (enableLegacyDemoRoutes) {
+    app.post(
+      "/tickets",
+      reservationRateLimiter,
+      validateBody(reserveTicketSchema),
+      reserveHandler
+    );
+  }
   app.post(
     "/api/v1/tickets",
     firebaseAuth,
@@ -278,7 +304,9 @@ export function createApp(
       response.json({ ticket: toTicketDto(ticket) });
     });
 
-  app.post("/purchase", validateBody(purchaseTicketSchema), purchaseHandler);
+  if (enableLegacyDemoRoutes) {
+    app.post("/purchase", validateBody(purchaseTicketSchema), purchaseHandler);
+  }
   app.post(
     "/api/v1/purchase",
     firebaseAuth,
@@ -316,19 +344,21 @@ export function createApp(
    *       409:
    *         description: Lock conflict.
    */
-  app.post(
-    "/tickets/:ticketId/purchase-optimistic",
-    validateBody(purchaseByRouteSchema),
-    asyncHandler(async (request, response) => {
-      const ticketId = Number(request.params.ticketId);
-      const ticket = await purchaseService.purchaseTicketOptimistic({
-        ticketId,
-        userId: request.body.userId
-      });
+  if (enableLegacyDemoRoutes) {
+    app.post(
+      "/tickets/:ticketId/purchase-optimistic",
+      validateBody(purchaseByRouteSchema),
+      asyncHandler(async (request, response) => {
+        const ticketId = Number(request.params.ticketId);
+        const ticket = await purchaseService.purchaseTicketOptimistic({
+          ticketId,
+          userId: request.body.userId
+        });
 
-      response.json({ ticket: toTicketDto(ticket) });
-    })
-  );
+        response.json({ ticket: toTicketDto(ticket) });
+      })
+    );
+  }
   app.post(
     "/api/v1/tickets/:ticketId/purchase-optimistic",
     firebaseAuth,
@@ -368,19 +398,21 @@ export function createApp(
    *       409:
    *         description: Lock conflict.
    */
-  app.post(
-    "/tickets/:ticketId/purchase-pessimistic",
-    validateBody(purchaseByRouteSchema),
-    asyncHandler(async (request, response) => {
-      const ticketId = Number(request.params.ticketId);
-      const ticket = await purchaseService.purchaseTicketPessimistic({
-        ticketId,
-        userId: request.body.userId
-      });
+  if (enableLegacyDemoRoutes) {
+    app.post(
+      "/tickets/:ticketId/purchase-pessimistic",
+      validateBody(purchaseByRouteSchema),
+      asyncHandler(async (request, response) => {
+        const ticketId = Number(request.params.ticketId);
+        const ticket = await purchaseService.purchaseTicketPessimistic({
+          ticketId,
+          userId: request.body.userId
+        });
 
-      response.json({ ticket: toTicketDto(ticket) });
-    })
-  );
+        response.json({ ticket: toTicketDto(ticket) });
+      })
+    );
+  }
   app.post(
     "/api/v1/tickets/:ticketId/purchase-pessimistic",
     firebaseAuth,
@@ -465,6 +497,21 @@ export function createApp(
     })
   );
 
+  app.delete(
+    "/api/v1/me/fcm-tokens",
+    firebaseAuth,
+    validateBody(fcmTokenSchema),
+    asyncHandler(async (request, response) => {
+      const authRequest = request as AuthenticatedRequest;
+      await notificationService.unregisterFcmToken(
+        authRequest.authUser.uid,
+        request.body.token
+      );
+
+      response.status(204).send();
+    })
+  );
+
   app.post(
     "/api/v1/debug/concurrency-error",
     asyncHandler(async (request) => {
@@ -493,8 +540,10 @@ export function createApp(
       response.json(cleanupResult);
     });
 
-  app.post("/cleanup", cleanupHandler);
-  app.post("/api/v1/cleanup", cleanupHandler);
+  if (enablePublicCleanup) {
+    app.post("/cleanup", cleanupHandler);
+    app.post("/api/v1/cleanup", cleanupHandler);
+  }
 
   app.use(errorMiddleware);
 

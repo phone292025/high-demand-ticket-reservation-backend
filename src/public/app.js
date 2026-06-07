@@ -4,6 +4,7 @@ const state = {
   messaging: null,
   serviceWorkerRegistration: null,
   currentUser: null,
+  lastUserId: null,
   idToken: null,
   concerts: [],
   tickets: [],
@@ -37,6 +38,15 @@ function clearAlert() {
   elements.alert.hidden = true;
 }
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function setBusy(button, busyText, isBusy) {
   if (!button) {
     return;
@@ -57,6 +67,10 @@ function cacheValue(key, value) {
 }
 
 function readCachedValue(key, fallback) {
+  if (!key) {
+    return fallback;
+  }
+
   const value = localStorage.getItem(key);
   if (!value) {
     return fallback;
@@ -66,6 +80,19 @@ function readCachedValue(key, fallback) {
     return JSON.parse(value);
   } catch {
     return fallback;
+  }
+}
+
+function ticketCacheKey(userId = state.currentUser?.uid) {
+  return userId ? `ticket-pwa:tickets:${userId}` : null;
+}
+
+function clearTicketCaches() {
+  for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+    const key = localStorage.key(index);
+    if (key === "ticket-pwa:tickets" || key?.startsWith("ticket-pwa:tickets:")) {
+      localStorage.removeItem(key);
+    }
   }
 }
 
@@ -120,6 +147,10 @@ async function apiFetch(path, options = {}) {
     throw new Error(body.message || `Request failed with ${response.status}`);
   }
 
+  if (response.status === 204) {
+    return null;
+  }
+
   return response.json();
 }
 
@@ -133,19 +164,20 @@ function renderConcerts() {
   }
 
   elements.concertsList.innerHTML = state.concerts
-    .map(
-      (concert) => `
+    .map((concert) => {
+      const startsAt = new Date(concert.startsAt).toLocaleString();
+      return `
         <section class="data-row">
           <div class="data-row-header">
             <div>
-              <p class="data-title">${concert.name}</p>
-              <p class="data-meta">${concert.venue} - ${new Date(concert.startsAt).toLocaleString()}</p>
+              <p class="data-title">${escapeHtml(concert.name)}</p>
+              <p class="data-meta">${escapeHtml(concert.venue)} - ${escapeHtml(startsAt)}</p>
             </div>
-            <span class="stock-pill">${concert.availableStock}/${concert.totalStock} left</span>
+            <span class="stock-pill">${escapeHtml(concert.availableStock)}/${escapeHtml(concert.totalStock)} left</span>
           </div>
         </section>
-      `
-    )
+      `;
+    })
     .join("");
 
   for (const concert of state.concerts) {
@@ -177,17 +209,17 @@ function renderTickets() {
         : "No active expiry";
       const purchaseButton =
         ticket.status === "PENDING" && navigator.onLine
-          ? `<button class="ghost-button" data-purchase-ticket="${ticket.id}" type="button">Purchase</button>`
+          ? `<button class="ghost-button" data-purchase-ticket="${escapeHtml(ticket.id)}" type="button">Purchase</button>`
           : "";
 
       return `
         <section class="data-row">
           <div class="data-row-header">
             <div>
-              <p class="data-title">Ticket ${ticket.id} - ${ticket.category}</p>
-              <p class="data-meta">Concert ${ticket.concertId} - Qty ${ticket.quantity} - ${expiresAt}</p>
+              <p class="data-title">Ticket ${escapeHtml(ticket.id)} - ${escapeHtml(ticket.category)}</p>
+              <p class="data-meta">Concert ${escapeHtml(ticket.concertId)} - Qty ${escapeHtml(ticket.quantity)} - ${escapeHtml(expiresAt)}</p>
             </div>
-            <span class="stock-pill">${ticket.status}</span>
+            <span class="stock-pill">${escapeHtml(ticket.status)}</span>
           </div>
           ${purchaseButton}
         </section>
@@ -220,14 +252,17 @@ async function refreshConcerts() {
 
 async function refreshTickets() {
   if (!state.currentUser || !state.idToken) {
-    state.tickets = readCachedValue("ticket-pwa:tickets", []);
+    state.tickets = [];
     renderTickets();
     return;
   }
 
+  const cacheKey = ticketCacheKey();
   const tickets = await apiFetch("/api/v1/me/tickets", { method: "GET" });
   state.tickets = tickets;
-  cacheValue("ticket-pwa:tickets", tickets);
+  if (cacheKey) {
+    cacheValue(cacheKey, tickets);
+  }
   renderTickets();
 }
 
@@ -238,7 +273,7 @@ async function refreshDashboard() {
     await refreshTickets();
   } catch (error) {
     state.concerts = readCachedValue("ticket-pwa:concerts", []);
-    state.tickets = readCachedValue("ticket-pwa:tickets", []);
+    state.tickets = readCachedValue(ticketCacheKey(), []);
     renderConcerts();
     renderTickets();
     showAlert(error.message, "error");
@@ -279,11 +314,21 @@ async function initializeFirebase() {
     : null;
 
   state.auth.onAuthStateChanged(async (user) => {
+    const previousUserId = state.currentUser?.uid;
     state.currentUser = user;
     state.idToken = user ? await user.getIdToken() : null;
+    state.lastUserId = user?.uid || null;
+    if (previousUserId && previousUserId !== state.lastUserId) {
+      state.tickets = [];
+    }
     elements.signInButton.hidden = Boolean(user);
     elements.signOutButton.hidden = !user;
     updateOnlineState();
+    if (!navigator.onLine && user) {
+      state.tickets = readCachedValue(ticketCacheKey(user.uid), []);
+      renderTickets();
+      return;
+    }
     await refreshTickets();
   });
 }
@@ -299,9 +344,15 @@ async function signIn() {
 }
 
 async function signOut() {
+  await unregisterNotificationToken();
+  clearTicketCaches();
+  state.tickets = [];
+
   if (state.auth) {
     await state.auth.signOut();
   }
+
+  renderTickets();
 }
 
 async function reserveTickets(event) {
@@ -386,6 +437,31 @@ async function enableNotifications() {
   showAlert("This browser is registered for reservation expiry reminders.");
 }
 
+async function unregisterNotificationToken() {
+  if (!state.currentUser || !state.idToken || !state.messaging || !state.firebaseConfig?.vapidKey) {
+    return;
+  }
+
+  try {
+    const token = await state.messaging.getToken({
+      vapidKey: state.firebaseConfig.vapidKey,
+      serviceWorkerRegistration: state.serviceWorkerRegistration
+    });
+
+    if (!token) {
+      return;
+    }
+
+    await apiFetch("/api/v1/me/fcm-tokens", {
+      method: "DELETE",
+      body: JSON.stringify({ token })
+    });
+    await state.messaging.deleteToken(token);
+  } catch {
+    // Sign-out should still finish if notification cleanup is already stale.
+  }
+}
+
 function wireEvents() {
   elements.signInButton.addEventListener("click", () => signIn().catch((error) => showAlert(error.message, "error")));
   elements.signOutButton.addEventListener("click", () => signOut().catch((error) => showAlert(error.message, "error")));
@@ -427,7 +503,8 @@ function wireEvents() {
 async function boot() {
   wireEvents();
   state.concerts = readCachedValue("ticket-pwa:concerts", []);
-  state.tickets = readCachedValue("ticket-pwa:tickets", []);
+  localStorage.removeItem("ticket-pwa:tickets");
+  state.tickets = [];
   renderConcerts();
   renderTickets();
   updateOnlineState();

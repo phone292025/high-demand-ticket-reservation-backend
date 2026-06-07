@@ -75,6 +75,14 @@ export class NotificationService {
     );
   }
 
+  async unregisterFcmToken(userId: string, token: string): Promise<void> {
+    const tokenRepository = this.dataSource.getRepository(FcmToken);
+    await tokenRepository.delete({
+      userId,
+      token: token.trim()
+    });
+  }
+
   async scheduleExpirationWarning(ticket: Ticket): Promise<TicketNotification | null> {
     if (!ticket.expiresAt) {
       return null;

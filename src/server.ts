@@ -49,7 +49,7 @@ async function bootstrap() {
 
   if (shouldEnableRateLimit && !redisClient) {
     logger.warn(
-      "REDIS_URL is not configured; Redis-backed reservation rate limiting is disabled"
+      "REDIS_URL is not configured; using in-memory reservation rate limiting"
     );
   }
 
@@ -62,7 +62,7 @@ async function bootstrap() {
   const notificationWorker = startNotificationWorker(notificationService);
 
   const app = createApp(AppDataSource, {
-    enableRateLimit: Boolean(redisClient),
+    enableRateLimit: shouldEnableRateLimit,
     redisClient,
     firebaseAuthVerifier,
     notificationService
