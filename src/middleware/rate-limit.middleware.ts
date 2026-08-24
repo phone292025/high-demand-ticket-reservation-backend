@@ -61,25 +61,48 @@ function createLimiter(
   return rateLimit(limiterOptions);
 }
 
+/**
+ * Base namespace for every limiter. Each one appends its own segment: sharing a
+ * single prefix would make the reservation, purchase and global limiters
+ * increment the same Redis counter for a given uid, so reserve traffic would
+ * silently eat the purchase budget.
+ */
+export const DEFAULT_RATE_LIMIT_PREFIX = "ticket-rate-limit:";
+
+/** Namespaces one limiter under the shared base so counters never collide. */
+export function rateLimitPrefix(basePrefix: string, limiterName: string): string {
+  return `${basePrefix}${limiterName}:`;
+}
+
 export function createReservationRateLimiter(
   redisClient?: RedisClientType,
-  prefix = "ticket-reserve-limit:"
+  basePrefix = DEFAULT_RATE_LIMIT_PREFIX
 ) {
   return createLimiter(
     "reservation",
     "Too many reservation requests. Please try again later.",
-    { redisClient, prefix, windowMs: 60 * 1000, limit: 5 }
+    {
+      redisClient,
+      prefix: rateLimitPrefix(basePrefix, "reserve"),
+      windowMs: 60 * 1000,
+      limit: 5
+    }
   );
 }
 
 export function createPurchaseRateLimiter(
   redisClient?: RedisClientType,
-  prefix = "ticket-purchase-limit:"
+  basePrefix = DEFAULT_RATE_LIMIT_PREFIX
 ) {
   return createLimiter(
     "purchase",
     "Too many purchase requests. Please try again later.",
-    { redisClient, prefix, windowMs: 60 * 1000, limit: 20 }
+    {
+      redisClient,
+      prefix: rateLimitPrefix(basePrefix, "purchase"),
+      windowMs: 60 * 1000,
+      limit: 20
+    }
   );
 }
 
@@ -89,11 +112,11 @@ export function createPurchaseRateLimiter(
  */
 export function createGlobalRateLimiter(
   redisClient?: RedisClientType,
-  prefix = "ticket-global-limit:"
+  basePrefix = DEFAULT_RATE_LIMIT_PREFIX
 ) {
   return createLimiter("global", "Too many requests. Please try again later.", {
     redisClient,
-    prefix,
+    prefix: rateLimitPrefix(basePrefix, "global"),
     windowMs: 60 * 1000,
     limit: 120
   });
