@@ -82,4 +82,18 @@ export function registerGracefulShutdown({
       void shutdown(signal);
     });
   }
+
+  // An unhandled rejection terminates the process by default on modern Node,
+  // turning one bad await into an outage. Log it, then take the same orderly
+  // path as a signal so in-flight requests and the SQLite file are not cut off
+  // mid-write.
+  process.on("unhandledRejection", (reason) => {
+    logger.error({ reason }, "Unhandled promise rejection; shutting down");
+    void shutdown("SIGTERM");
+  });
+
+  process.on("uncaughtException", (error) => {
+    logger.error({ error }, "Uncaught exception; shutting down");
+    void shutdown("SIGTERM");
+  });
 }

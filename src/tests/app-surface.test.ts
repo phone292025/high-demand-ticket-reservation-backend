@@ -246,3 +246,40 @@ describe("Application surface", () => {
     );
   });
 });
+
+describe("Request body hardening", () => {
+  let harness: TestHarness;
+
+  beforeEach(async () => {
+    harness = await createTestHarness();
+  });
+
+  afterEach(async () => {
+    await harness.destroy();
+  });
+
+  it("drops __proto__ from a JSON body", async () => {
+    const concert = await harness.createConcert(1);
+
+    await request(harness.app)
+      .post("/reserve")
+      .set("Content-Type", "application/json")
+      .send(
+        `{"concertId":${concert.id},"userId":"pp","quantity":1,"__proto__":{"polluted":"yes"}}`
+      )
+      .expect(201);
+
+    expect(Object.prototype).not.toHaveProperty("polluted");
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
+  it("rejects a body over the size limit with 413", async () => {
+    const response = await request(harness.app)
+      .post("/reserve")
+      .set("Content-Type", "application/json")
+      .send({ concertId: 1, userId: "x".repeat(200_000), quantity: 1 })
+      .expect(413);
+
+    expect(response.body.error).toBe("PAYLOAD_TOO_LARGE");
+  });
+});

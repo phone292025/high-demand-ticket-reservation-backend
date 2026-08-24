@@ -3,3 +3,5 @@ coverage
 node_modules
 .vercel-static
 package-lock.json
+.env.example
+.gitattributes

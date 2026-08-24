@@ -116,6 +116,16 @@ export class NotificationService {
 
     // Reassigning an existing token to another user grows that user's set just
     // as much as inserting one, so both paths have to enforce the cap.
+    if (existingToken && existingToken.userId !== userId) {
+      // Holding an FCM token is what proves a device owns it, so a handover is
+      // legitimate (a shared browser). Record it anyway: if a token ever leaks,
+      // this is the only trace of someone redirecting the notifications.
+      logger.warn(
+        { previousUserId: existingToken.userId, userId },
+        "FCM token reassigned to a different user"
+      );
+    }
+
     const savedToken = existingToken
       ? await tokenRepository.save(Object.assign(existingToken, { userId }))
       : await tokenRepository.save(

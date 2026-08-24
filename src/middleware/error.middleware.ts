@@ -10,6 +10,51 @@ import { AppError, ConcurrencyError } from "../errors/AppError";
 import { logger } from "../logger/logger";
 import { captureError } from "../observability/sentry";
 
+/**
+ * body-parser rejects oversized, malformed and unsupported bodies with a
+ * `type` and an HTTP status already decided. Without this they fell through to
+ * a generic 500, so a client sending too much data was told the server broke
+ * and Sentry was paged for an ordinary bad request.
+ */
+const BODY_PARSER_ERRORS: Record<
+  string,
+  { status: number; code: string; message: string }
+> = {
+  "entity.too.large": {
+    status: 413,
+    code: "PAYLOAD_TOO_LARGE",
+    message: "Request body is too large"
+  },
+  "entity.parse.failed": {
+    status: 400,
+    code: "VALIDATION_ERROR",
+    message: "Invalid JSON body"
+  },
+  "encoding.unsupported": {
+    status: 415,
+    code: "UNSUPPORTED_MEDIA_TYPE",
+    message: "Unsupported content encoding"
+  },
+  "request.aborted": {
+    status: 400,
+    code: "REQUEST_ABORTED",
+    message: "Request aborted before it was fully received"
+  }
+};
+
+function asBodyParserError(error: unknown): AppError | undefined {
+  if (typeof error !== "object" || error === null || !("type" in error)) {
+    return undefined;
+  }
+
+  const mapped = BODY_PARSER_ERRORS[String((error as { type: unknown }).type)];
+  return mapped
+    ? new AppError(mapped.status, mapped.code, mapped.message, {
+        cause: error as unknown as Error
+      })
+    : undefined;
+}
+
 /** SQLite write-contention codes that mean "retry", not "server broke". */
 const CONTENTION_SQL_CODES = ["SQLITE_BUSY", "SQLITE_LOCKED"];
 
@@ -35,6 +80,11 @@ function mapError(error: unknown): AppError {
       "Validation error"
     );
     return new AppError(400, "VALIDATION_ERROR", "Invalid request body");
+  }
+
+  const bodyParserError = asBodyParserError(error);
+  if (bodyParserError) {
+    return bodyParserError;
   }
 
   if (error instanceof SyntaxError && "body" in error) {

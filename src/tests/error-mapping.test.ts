@@ -152,3 +152,32 @@ describe("FirebaseNotificationSender", () => {
     expect(result.invalidTokens).toEqual(["malformed-token"]);
   });
 });
+
+describe("Body parser errors", () => {
+  function appWithLimit(limit: string) {
+    const app = express();
+    app.use(correlationIdMiddleware);
+    app.use(express.json({ limit }));
+    app.post("/echo", (_request, response) => response.json({ ok: true }));
+    app.use(errorMiddleware);
+    return app;
+  }
+
+  it("rejects an oversized body as 413, not 500", async () => {
+    const response = await request(appWithLimit("1kb"))
+      .post("/echo")
+      .set("Content-Type", "application/json")
+      .send({ padding: "x".repeat(5000) })
+      .expect(413);
+
+    expect(response.body.error).toBe("PAYLOAD_TOO_LARGE");
+    expect(response.body.ref).toBeDefined();
+  });
+
+  it("still accepts a body under the limit", async () => {
+    await request(appWithLimit("1kb"))
+      .post("/echo")
+      .send({ padding: "x" })
+      .expect(200);
+  });
+});

@@ -158,7 +158,16 @@ export function createApp(dataSource: DataSource, options: CreateAppOptions = {}
   );
   app.use(correlationIdMiddleware);
   app.use(requestLoggerMiddleware);
-  app.use(express.json({ limit: "64kb" }));
+  app.use(
+    express.json({
+      limit: "64kb",
+      // Zod .strict() does not treat "__proto__" as an unknown key, so it slips
+      // through validation. Zod strips it from the output today and nothing is
+      // polluted, but dropping it at parse time stops that from depending on a
+      // library internal.
+      reviver: (key, value) => (key === "__proto__" ? undefined : value)
+    })
+  );
 
   const publicPath = path.join(__dirname, "public");
   app.get(/^\/app$/, (_request, response) => response.redirect("/app/"));
