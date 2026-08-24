@@ -70,11 +70,7 @@ function secretsMatch(provided: string | undefined, expected: string): boolean {
   return timingSafeEqual(providedBuffer, expectedBuffer);
 }
 
-/**
- * The PWA loads the Firebase compat SDK from gstatic and talks to Google's auth
- * and messaging endpoints, so it needs an explicit allowlist. Swagger UI ships
- * inline scripts of its own and is deliberately left outside this policy.
- */
+/** CSP for the PWA. Swagger UI needs inline scripts and is excluded. */
 const appContentSecurityPolicy = helmet.contentSecurityPolicy({
   useDefaults: false,
   directives: {
@@ -106,11 +102,7 @@ export interface CreateAppOptions {
   rateLimitPrefix?: string;
   firebaseAuthVerifier?: FirebaseAuthVerifier;
   notificationService?: NotificationService;
-  /**
-   * Proxy hops to trust for client IP resolution. Behind the shipped nginx this
-   * must be 1 — with the default of 0, every request appears to come from the
-   * proxy and the whole internet shares a single rate-limit bucket.
-   */
+  /** Proxy hops to trust for client IP resolution. 1 behind nginx or Render. */
   trustProxy?: number | boolean | string;
 }
 
@@ -149,10 +141,9 @@ export function createApp(dataSource: DataSource, options: CreateAppOptions = {}
 
   app.use(
     helmet({
-      // Swagger UI injects inline scripts; /app gets its own policy below.
+      // /app gets its own policy below.
       contentSecurityPolicy: false,
-      // Firebase signInWithPopup needs the popup to reach its opener, which a
-      // bare same-origin COOP would block.
+      // signInWithPopup needs the popup to reach its opener.
       crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" }
     })
   );
@@ -161,10 +152,7 @@ export function createApp(dataSource: DataSource, options: CreateAppOptions = {}
   app.use(
     express.json({
       limit: "64kb",
-      // Zod .strict() does not treat "__proto__" as an unknown key, so it slips
-      // through validation. Zod strips it from the output today and nothing is
-      // polluted, but dropping it at parse time stops that from depending on a
-      // library internal.
+      // Zod .strict() does not reject __proto__; drop it at parse time.
       reviver: (key, value) => (key === "__proto__" ? undefined : value)
     })
   );
@@ -239,11 +227,7 @@ export function createApp(dataSource: DataSource, options: CreateAppOptions = {}
   app.get("/health", healthHandler);
   app.get("/api/v1/health", healthHandler);
 
-  /**
-   * Readiness: the process can actually serve traffic. A liveness probe that
-   * always returns ok lets a release with an unusable database pass its own
-   * smoke test.
-   */
+  /** Readiness: the process can actually serve traffic. */
   const readinessHandler = asyncHandler(async (_request, response) => {
     const checks: Record<string, "ok" | "unavailable" | "not_configured"> = {
       database: "ok",
@@ -391,9 +375,7 @@ export function createApp(dataSource: DataSource, options: CreateAppOptions = {}
       reserveHandler
     );
   }
-  // Rate limiter ahead of auth: otherwise a flood of invalid tokens is rejected
-  // by the auth layer before the limiter ever runs, and each one costs a
-  // Firebase token verification.
+  // Limiter ahead of auth so unauthenticated floods cost no token verification.
   app.post(
     "/api/v1/reserve",
     globalRateLimiter,

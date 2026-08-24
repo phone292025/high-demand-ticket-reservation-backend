@@ -57,7 +57,6 @@ describe("Error mapping", () => {
       .expect(500);
 
     expect(response.body.error).toBe("INTERNAL_ERROR");
-    // The driver message must not leak to the client.
     expect(response.body.message).toBe("Internal server error");
   });
 
@@ -133,8 +132,6 @@ describe("FirebaseNotificationSender", () => {
 
     expect(result.successCount).toBe(1);
     expect(result.failureCount).toBe(2);
-    // Only the permanently invalid one is offered up for deletion; a transient
-    // internal error must not cost the user their registration.
     expect(result.invalidTokens).toEqual(["dead-token"]);
   });
 

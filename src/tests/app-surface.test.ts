@@ -69,7 +69,6 @@ describe("Application surface", () => {
     expect(policy).toContain("script-src 'self' https://www.gstatic.com");
     expect(policy).toContain("frame-ancestors 'none'");
 
-    // Swagger UI ships inline scripts and must stay outside that policy.
     const docsResponse = await request(harness.app).get("/docs/").expect(200);
     expect(docsResponse.headers["content-security-policy"]).toBeUndefined();
   });
@@ -190,7 +189,6 @@ describe("Application surface", () => {
         .set("X-Debug-Secret", "wrong-secret")
         .expect(403);
 
-      // Constant-time comparison must still reject a length mismatch.
       await request(harness.app)
         .post("/api/v1/debug/concurrency-error")
         .set("X-Debug-Secret", "debug-secret-but-longer")

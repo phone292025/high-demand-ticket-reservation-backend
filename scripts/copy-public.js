@@ -21,8 +21,7 @@ function computeBuildId() {
     return process.env.BUILD_ID;
   }
 
-  // Content hash of the shell: identical assets keep the same cache name, so a
-  // rebuild that changes nothing does not force every client to re-download.
+  // Content hash of the shell, so identical assets keep the same cache name.
   const hash = createHash("sha256");
 
   for (const fileName of fs.readdirSync(sourceDir).sort()) {

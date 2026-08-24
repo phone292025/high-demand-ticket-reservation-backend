@@ -14,11 +14,7 @@ export interface RateLimiterOptions {
   limit?: number;
 }
 
-/**
- * Prefer the verified Firebase uid over the IP. IP alone throttles a whole
- * campus behind one NAT together while letting one client on a proxy pool
- * through unlimited. `ipKeyGenerator` normalises IPv6 into a /64 block.
- */
+/** Key on the verified uid when present, otherwise the normalised IP. */
 function authAwareKeyGenerator(request: Request): string {
   const authUser = (request as Request & { authUser?: FirebaseUser }).authUser;
 
@@ -61,12 +57,7 @@ function createLimiter(
   return rateLimit(limiterOptions);
 }
 
-/**
- * Base namespace for every limiter. Each one appends its own segment: sharing a
- * single prefix would make the reservation, purchase and global limiters
- * increment the same Redis counter for a given uid, so reserve traffic would
- * silently eat the purchase budget.
- */
+/** Base namespace; each limiter appends its own segment. */
 export const DEFAULT_RATE_LIMIT_PREFIX = "ticket-rate-limit:";
 
 /** Namespaces one limiter under the shared base so counters never collide. */
@@ -106,10 +97,7 @@ export function createPurchaseRateLimiter(
   );
 }
 
-/**
- * Front-door limiter. Runs before authentication so a flood of invalid tokens
- * cannot force a Firebase verification per request.
- */
+/** Front-door limiter, applied before authentication. */
 export function createGlobalRateLimiter(
   redisClient?: RedisClientType,
   basePrefix = DEFAULT_RATE_LIMIT_PREFIX

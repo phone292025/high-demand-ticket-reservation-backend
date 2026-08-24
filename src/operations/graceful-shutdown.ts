@@ -10,7 +10,7 @@ export interface GracefulShutdownOptions {
   dataSource: DataSource;
   redisClient?: RedisClientType;
   waitMs?: number;
-  /** Force-exit budget for the whole sequence, including `server.close`. */
+  /** Force-exit budget for the whole sequence. */
   forceExitMs?: number;
   onShutdown?: Array<() => void | Promise<void>>;
 }
@@ -35,9 +35,7 @@ export function registerGracefulShutdown({
     shuttingDown = true;
     logger.info({ signal }, "Shutdown signal received");
 
-    // `server.close` never fires while a keep-alive connection is open. Without
-    // this the container waits for the orchestrator's SIGKILL instead, which
-    // can land mid-write on the SQLite file.
+    // server.close never fires while a keep-alive connection is open.
     const forceExitTimer = setTimeout(() => {
       logger.error("Graceful shutdown timed out; forcing exit");
       process.exit(1);
@@ -53,8 +51,7 @@ export function registerGracefulShutdown({
 
       await new Promise((resolve) => setTimeout(resolve, waitMs));
 
-      // Background workers first: a tick firing after the DataSource is
-      // destroyed would query a dead connection.
+      // Workers first, so no tick outlives the DataSource.
       for (const shutdownTask of onShutdown) {
         await shutdownTask();
       }
@@ -83,10 +80,7 @@ export function registerGracefulShutdown({
     });
   }
 
-  // An unhandled rejection terminates the process by default on modern Node,
-  // turning one bad await into an outage. Log it, then take the same orderly
-  // path as a signal so in-flight requests and the SQLite file are not cut off
-  // mid-write.
+  // Node terminates on these by default; shut down in order instead.
   process.on("unhandledRejection", (reason) => {
     logger.error({ reason }, "Unhandled promise rejection; shutting down");
     void shutdown("SIGTERM");

@@ -7,11 +7,6 @@ import {
 import type { TestHarness } from "./helpers/test-harness";
 import { createTestHarness } from "./helpers/test-harness";
 
-/**
- * These are the tests whose absence let two production defects through: the
- * limiter keying every client to the proxy address, and auth running ahead of
- * the limiter so unauthenticated floods bypassed it entirely.
- */
 describe("Rate limiting", () => {
   let harness: TestHarness;
   let concert: Concert;
@@ -19,8 +14,6 @@ describe("Rate limiting", () => {
   beforeEach(async () => {
     harness = await createTestHarness({
       enableRateLimit: true,
-      // A fresh prefix per suite keeps the in-memory store from leaking across
-      // tests within a run.
       rateLimitPrefix: `test-${Date.now()}-${Math.random()}:`,
       trustProxy: 1
     });
@@ -82,8 +75,7 @@ describe("Rate limiting", () => {
     }
     await reserveAs("198.51.100.1", "noisy_user").expect(429);
 
-    // An unrelated client must be unaffected. Without `trust proxy` both
-    // resolve to the same socket address and this returns 429.
+    // An unrelated client must be unaffected.
     for (const [index, clientIp] of [
       "198.51.100.2",
       "198.51.100.3",
@@ -101,7 +93,6 @@ describe("Rate limiting", () => {
         .set("X-Forwarded-For", clientIp)
         .send({ concertId: concert.id, category: "General", quantity: 1 });
 
-    // Same user, rotating IPs: the uid bucket still catches them.
     for (let attempt = 0; attempt < 5; attempt += 1) {
       await reserveAuthenticated(
         `198.51.100.${100 + attempt}`,
@@ -110,7 +101,6 @@ describe("Rate limiting", () => {
     }
     await reserveAuthenticated("198.51.100.200", "owner_token").expect(429);
 
-    // A different user sharing one NAT address is not collateral damage.
     await reserveAuthenticated("198.51.100.200", "other_token").expect(201);
   });
 
@@ -133,8 +123,6 @@ describe("Rate limiting", () => {
     }
 
     expect(statuses).toContain(429);
-    // The global limiter has to fire before the verifier is consulted for every
-    // one of those requests.
     expect(
       harness.firebaseAuthVerifier.verifyIdToken.mock.calls.length
     ).toBeLessThan(statuses.length);
@@ -145,7 +133,6 @@ describe("Rate limiting", () => {
       201
     );
 
-    // The reservation limiter is now partly consumed; purchases keep their own.
     const purchaseResponse = await request(harness.app)
       .post("/purchase")
       .set("X-Forwarded-For", "203.0.113.50")
@@ -166,8 +153,6 @@ describe("Rate limiter namespacing", () => {
       rateLimitPrefix(base, name)
     );
 
-    // A single shared prefix would make all three limiters increment the same
-    // Redis counter for one uid, so reserve traffic would eat purchase budget.
     expect(new Set(prefixes).size).toBe(3);
     for (const prefix of prefixes) {
       expect(prefix.startsWith(base)).toBe(true);

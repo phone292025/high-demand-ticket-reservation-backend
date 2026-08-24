@@ -1,8 +1,4 @@
-/**
- * The build id below is stamped in by `npm run copy:public`. A hardcoded cache
- * name meant installed clients kept serving the old bundle forever, because
- * nothing ever invalidated the entry.
- */
+/** Build id is stamped in by `npm run copy:public`. */
 const BUILD_ID = "__BUILD_ID__";
 const CACHE_NAME = `ticket-hold-desk-${BUILD_ID}`;
 const DATA_CACHE = `ticket-hold-desk-data-${BUILD_ID}`;
@@ -74,10 +70,7 @@ self.addEventListener("activate", (event) => {
   );
 });
 
-/**
- * Serve the cached copy immediately, then refresh it in the background so the
- * next load picks up a new deploy. Falls back to the network on a cold cache.
- */
+/** Serve from cache, refresh in the background. */
 async function staleWhileRevalidate(request, cacheName) {
   const cache = await caches.open(cacheName);
   const cachedResponse = await cache.match(request);

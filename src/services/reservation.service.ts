@@ -37,8 +37,6 @@ export class ReservationService {
         const updateResult = await queryRunner.manager
           .createQueryBuilder()
           .update(Concert)
-          // Bound parameter, not interpolation: the value is validated upstream,
-          // but the raw fragment must not depend on that staying true.
           .set({ availableStock: () => `"availableStock" - :reservedQuantity` })
           .where("id = :concertId", { concertId: input.concertId })
           .andWhere("availableStock >= :quantity", { quantity: input.quantity })

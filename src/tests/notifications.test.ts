@@ -134,7 +134,6 @@ describe("Expiry notifications", () => {
 
     expect(result.sentCount).toBe(0);
     expect(result.failedCount).toBe(1);
-    // Retries remain, so it stays PENDING for the worker to pick up again.
     expect(reloaded.status).toBe(TicketNotificationStatus.Pending);
     expect(reloaded.attempts).toBe(1);
     expect(reloaded.error).toContain("rejected");
@@ -181,7 +180,6 @@ describe("Expiry notifications", () => {
       );
     }
 
-    // Exhausted rows are no longer selected by the worker.
     const afterGivingUp =
       await harness.notificationService.processDueExpirationWarnings(NOW);
     expect(afterGivingUp).toEqual({

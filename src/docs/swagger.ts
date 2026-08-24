@@ -1,11 +1,7 @@
 import path from "node:path";
 import swaggerJSDoc from "swagger-jsdoc";
 
-/**
- * Resolved against this module, not the working directory. A bare "src/app.ts"
- * silently matches nothing in the Docker image — which ships only `dist` — so
- * the published docs rendered with zero paths.
- */
+/** Resolved against this module so it works from dist as well as src. */
 const annotatedSources = [
   path.join(__dirname, "..", "app.ts"),
   path.join(__dirname, "..", "app.js")

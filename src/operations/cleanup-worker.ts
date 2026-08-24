@@ -7,12 +7,7 @@ export interface CleanupWorker {
 
 export const DEFAULT_CLEANUP_INTERVAL_MS = 30 * 1000;
 
-/**
- * Without this, an abandoned reservation holds its stock forever: the row stays
- * PENDING past `expiresAt` and the seats are never resold. The HTTP /cleanup
- * route is kept for manual runs, but it is disabled in production by default,
- * so the sweep has to be scheduled here.
- */
+/** Sweeps expired reservations so their stock is released. */
 export function startCleanupWorker(
   cleanupService: CleanupService,
   intervalMs = DEFAULT_CLEANUP_INTERVAL_MS

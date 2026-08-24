@@ -75,7 +75,6 @@ describe("Graceful shutdown", () => {
     });
 
     process.emit(signal);
-    // Let the async shutdown chain settle.
     await new Promise((resolve) => setTimeout(resolve, 60));
 
     return { order, dataSource, server };
@@ -124,8 +123,7 @@ describe("Graceful shutdown", () => {
       dataSource,
       waitMs: 0,
       forceExitMs: 30,
-      // Never settles, so only the force-exit timer can end this. A pending
-      // promise rather than a long timer, so it cannot outlive the test run.
+      // Never settles, so only the force-exit timer can end this.
       onShutdown: [() => new Promise<void>(() => undefined)]
     });
 

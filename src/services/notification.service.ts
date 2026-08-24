@@ -44,16 +44,10 @@ export const MAX_NOTIFICATION_ATTEMPTS = 3;
 /** Cap on stored FCM registrations per user; oldest are evicted first. */
 export const MAX_FCM_TOKENS_PER_USER = 10;
 
-/**
- * Ceiling on rows deleted per registration. A user who somehow holds thousands
- * of tokens is trimmed over several calls instead of in one huge DELETE.
- */
+/** Ceiling on rows deleted per registration. */
 const MAX_EVICTIONS_PER_REGISTRATION = 100;
 
-/**
- * FCM error codes that mean the token will never work again, as opposed to a
- * transient delivery failure worth retrying.
- */
+/** FCM error codes meaning the token is permanently dead. */
 const PERMANENT_TOKEN_ERROR_CODES = new Set([
   "messaging/registration-token-not-registered",
   "messaging/invalid-registration-token",
@@ -114,12 +108,8 @@ export class NotificationService {
       where: { token: trimmedToken }
     });
 
-    // Reassigning an existing token to another user grows that user's set just
-    // as much as inserting one, so both paths have to enforce the cap.
     if (existingToken && existingToken.userId !== userId) {
-      // Holding an FCM token is what proves a device owns it, so a handover is
-      // legitimate (a shared browser). Record it anyway: if a token ever leaks,
-      // this is the only trace of someone redirecting the notifications.
+      // Handover is legitimate; recorded for audit.
       logger.warn(
         { previousUserId: existingToken.userId, userId },
         "FCM token reassigned to a different user"
@@ -147,15 +137,11 @@ export class NotificationService {
     });
   }
 
-  /**
-   * A user cycling browsers or reinstalling the PWA accumulates registrations
-   * forever otherwise; every stale one costs a wasted send on each reminder.
-   */
+  /** Trims a user back to MAX_FCM_TOKENS_PER_USER, oldest first. */
   private async evictOldestTokensOverLimit(userId: string): Promise<void> {
     const tokenRepository = this.dataSource.getRepository(FcmToken);
 
-    // Read only the rows past the cap rather than the user's whole set: a
-    // history of imports can leave far more registrations than the limit.
+    // Read only the rows past the cap.
     const staleTokens = await tokenRepository
       .createQueryBuilder("fcmToken")
       .select("fcmToken.id")
@@ -285,8 +271,7 @@ export class NotificationService {
 
       await this.pruneInvalidTokens(sendResult.invalidTokens);
 
-      // A resolved promise is not delivery: every token can fail inside a
-      // successful multicast call.
+      // A resolved multicast can still have failed every token.
       if (sendResult.successCount === 0) {
         return this.recordFailure(
           notification,
@@ -308,10 +293,7 @@ export class NotificationService {
     }
   }
 
-  /**
-   * Leaves the row PENDING while retries remain so the worker picks it up
-   * again; only a exhausted budget makes the failure terminal.
-   */
+  /** Stays PENDING while retries remain; terminal once the budget is spent. */
   private async recordFailure(
     notification: TicketNotification,
     message: string

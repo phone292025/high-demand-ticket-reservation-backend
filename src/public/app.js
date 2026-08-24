@@ -132,11 +132,7 @@ function hasFirebaseConfig(config) {
   );
 }
 
-/**
- * Firebase ID tokens expire after an hour. The SDK refreshes them on demand and
- * returns a cached copy otherwise, so this has to be asked for per request --
- * holding one leaves every call 401ing until the user reloads the page.
- */
+/** Asked for per request; the SDK caches and refreshes as needed. */
 async function currentIdToken() {
   if (!state.currentUser) {
     return null;

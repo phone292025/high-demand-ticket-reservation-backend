@@ -74,8 +74,6 @@ async function bootstrap() {
   );
   const notificationWorker = startNotificationWorker(notificationService);
 
-  // Expired reservations have to be swept on a schedule; the /cleanup route is
-  // disabled in production, so nothing else releases the held stock.
   const cleanupWorker = startCleanupWorker(new CleanupService(AppDataSource));
 
   const app = createApp(AppDataSource, {

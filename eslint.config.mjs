@@ -35,13 +35,11 @@ export default tseslint.config(
     }
   },
   {
-    // Scripts are CLIs; printing to stdout is the point.
     files: ["src/scripts/**/*.ts"],
     rules: { "no-console": "off" }
   },
   {
-    // `import type` is erased before emit, which would leave TypeORM's
-    // emitDecoratorMetadata reflecting `Object` for column and relation types.
+    // `import type` is erased before emit, breaking emitDecoratorMetadata.
     files: ["src/entities/**/*.ts", "src/migrations/**/*.ts"],
     rules: { "@typescript-eslint/consistent-type-imports": "off" }
   },

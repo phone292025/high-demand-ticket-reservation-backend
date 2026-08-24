@@ -198,7 +198,6 @@ describe("Reservations", () => {
   it("refuses to drive availableStock below zero at the storage layer", async () => {
     const concert = await harness.createConcert(1);
 
-    // Bypasses every application guard; only the database trigger is left.
     await expect(
       harness.dataSource.query(
         `UPDATE concerts SET "availableStock" = -1 WHERE id = ?`,

@@ -1,18 +1,12 @@
 import { MigrationInterface, QueryRunner } from "typeorm";
 
 /**
- * Three hardening changes:
+ * Adds ticket_notifications.attempts, a composite index on tickets
+ * (userId, id), and triggers keeping 0 <= availableStock <= totalStock.
  *
- *  1. `ticket_notifications.attempts` so a failed send can be retried a bounded
- *     number of times instead of being abandoned on the first error.
- *  2. A composite index on `tickets (userId, id)` — GET /api/v1/me/tickets was
- *     the only hot query still doing a full table scan, and it sorts by id.
- *  3. Triggers enforcing `0 <= availableStock <= totalStock` on concerts.
- *
- * Triggers rather than a CHECK constraint: SQLite cannot add a constraint to an
- * existing table, and rebuilding `concerts` would mean dropping a table that
- * `tickets` references ON DELETE CASCADE. Triggers give the same storage-layer
- * guarantee without putting existing ticket rows at risk.
+ * Triggers rather than a CHECK constraint: SQLite cannot add a constraint to
+ * an existing table, and rebuilding concerts would drop a table that tickets
+ * references ON DELETE CASCADE.
  */
 export class AddNotificationRetriesAndStockGuards1710000000004 implements MigrationInterface {
   name = "AddNotificationRetriesAndStockGuards1710000000004";

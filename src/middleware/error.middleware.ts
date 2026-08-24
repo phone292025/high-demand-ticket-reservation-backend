@@ -10,12 +10,7 @@ import { AppError, ConcurrencyError } from "../errors/AppError";
 import { logger } from "../logger/logger";
 import { captureError } from "../observability/sentry";
 
-/**
- * body-parser rejects oversized, malformed and unsupported bodies with a
- * `type` and an HTTP status already decided. Without this they fell through to
- * a generic 500, so a client sending too much data was told the server broke
- * and Sentry was paged for an ordinary bad request.
- */
+/** body-parser failures carry their own status; honour it. */
 const BODY_PARSER_ERRORS: Record<
   string,
   { status: number; code: string; message: string }
@@ -55,7 +50,7 @@ function asBodyParserError(error: unknown): AppError | undefined {
     : undefined;
 }
 
-/** SQLite write-contention codes that mean "retry", not "server broke". */
+/** SQLite write-contention codes; these mean retry. */
 const CONTENTION_SQL_CODES = ["SQLITE_BUSY", "SQLITE_LOCKED"];
 
 function isContentionError(error: QueryFailedError): boolean {
@@ -93,8 +88,7 @@ function mapError(error: unknown): AppError {
     });
   }
 
-  // A lost race is an expected outcome of concurrent purchases, not a bug.
-  // Reported as 500 it pages the on-call and pollutes Sentry.
+  // A lost race is an expected outcome, not a fault.
   if (error instanceof OptimisticLockVersionMismatchError) {
     return new ConcurrencyError();
   }
@@ -125,7 +119,7 @@ export const errorMiddleware: ErrorRequestHandler = (
   const mappedError = mapError(error);
   const correlationId = getCorrelationId();
 
-  // Expected 4xx outcomes are noise in Sentry; only report real faults.
+  // Only report real faults.
   if (mappedError.statusCode >= 500) {
     captureError(error, {
       code: mappedError.code,

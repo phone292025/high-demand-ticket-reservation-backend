@@ -37,10 +37,7 @@ export interface TestHarness {
   destroy(): Promise<void>;
 }
 
-/**
- * One in-memory database, migrated and seeded, plus the doubles every suite
- * needs. Each spec file owns its own harness so they stay independent.
- */
+/** One migrated in-memory database plus the doubles each suite needs. */
 export async function createTestHarness(
   appOptions: Partial<CreateAppOptions> = {}
 ): Promise<TestHarness> {

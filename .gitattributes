@@ -1,9 +1,6 @@
-# Normalise to LF in the repository and in every working tree. Without this,
-# Windows checkouts get CRLF, Prettier's endOfLine:"lf" check fails locally
-# while passing in Linux CI, and diffs show whole files as changed.
+# Normalise line endings to LF everywhere.
 * text=auto eol=lf
 
-# Binary assets must never be line-ending converted.
 *.png binary
 *.jpg binary
 *.ico binary

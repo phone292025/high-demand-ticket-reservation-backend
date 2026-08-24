@@ -155,12 +155,10 @@ describe("Authentication and per-user resources", () => {
       .find({ where: { userId: "firebase_owner" }, order: { id: "ASC" } });
 
     expect(tokens).toHaveLength(MAX_FCM_TOKENS_PER_USER);
-    // The three earliest registrations are the ones dropped.
     expect(tokens[0].token).toBe("fcm-token-value-with-enough-length-3");
   });
 
   it("enforces the cap when a token is reassigned to another user", async () => {
-    // Fill the second user to exactly the cap.
     for (let index = 0; index < MAX_FCM_TOKENS_PER_USER; index += 1) {
       await request(harness.app)
         .post("/api/v1/me/fcm-tokens")
@@ -169,8 +167,6 @@ describe("Authentication and per-user resources", () => {
         .expect(201);
     }
 
-    // A token owned by someone else now moves onto that full account. This is
-    // the reassign path, which used to skip eviction entirely.
     await request(harness.app)
       .post("/api/v1/me/fcm-tokens")
       .set("Authorization", "Bearer owner_token")
