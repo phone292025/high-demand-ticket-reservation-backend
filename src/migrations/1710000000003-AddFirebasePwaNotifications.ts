@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from "typeorm";
 
-export class AddFirebasePwaNotifications1710000000003
-  implements MigrationInterface
-{
+export class AddFirebasePwaNotifications1710000000003 implements MigrationInterface {
   name = "AddFirebasePwaNotifications1710000000003";
 
   public async up(queryRunner: QueryRunner): Promise<void> {

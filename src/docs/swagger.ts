@@ -1,4 +1,15 @@
+import path from "node:path";
 import swaggerJSDoc from "swagger-jsdoc";
+
+/**
+ * Resolved against this module, not the working directory. A bare "src/app.ts"
+ * silently matches nothing in the Docker image — which ships only `dist` — so
+ * the published docs rendered with zero paths.
+ */
+const annotatedSources = [
+  path.join(__dirname, "..", "app.ts"),
+  path.join(__dirname, "..", "app.js")
+];
 
 export const swaggerSpec = swaggerJSDoc({
   definition: {
@@ -6,7 +17,8 @@ export const swaggerSpec = swaggerJSDoc({
     info: {
       title: "High-Demand Ticket Reservation Backend",
       version: "3.0.0",
-      description: "Hardened ticket API with validation, logging, locking, and rate limiting."
+      description:
+        "Hardened ticket API with validation, logging, locking, and rate limiting."
     },
     servers: [
       {
@@ -116,5 +128,5 @@ export const swaggerSpec = swaggerJSDoc({
       }
     }
   },
-  apis: ["src/app.ts"]
+  apis: annotatedSources
 });

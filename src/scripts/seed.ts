@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { DataSource } from "typeorm";
+import type { DataSource } from "typeorm";
 import { AppDataSource, initializeDataSource } from "../data-source";
 import { Concert } from "../entities/Concert";
 

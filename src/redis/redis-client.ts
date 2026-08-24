@@ -1,4 +1,5 @@
-import { createClient, RedisClientType } from "redis";
+import type { RedisClientType } from "redis";
+import { createClient } from "redis";
 import { logger } from "../logger/logger";
 
 export async function createRedisClient(): Promise<RedisClientType> {

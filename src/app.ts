@@ -1,12 +1,13 @@
-import express, { NextFunction, Request, Response } from "express";
+import { timingSafeEqual } from "node:crypto";
+import type { NextFunction, Request, RequestHandler, Response } from "express";
+import express from "express";
+import helmet from "helmet";
 import path from "node:path";
 import swaggerUi from "swagger-ui-express";
-import { DataSource } from "typeorm";
-import { RedisClientType } from "redis";
-import {
-  FirebaseAuthVerifier,
-  getPublicFirebaseConfig
-} from "./auth/firebase-admin";
+import type { DataSource } from "typeorm";
+import type { RedisClientType } from "redis";
+import type { FirebaseAuthVerifier } from "./auth/firebase-config";
+import { getPublicFirebaseConfig } from "./auth/firebase-config";
 import { Concert } from "./entities/Concert";
 import { Ticket } from "./entities/Ticket";
 import { swaggerSpec } from "./docs/swagger";
@@ -14,11 +15,13 @@ import { toTicketDto, toTicketDtos } from "./dto/ticket.dto";
 import { AppError, ConcurrencyError } from "./errors/AppError";
 import { errorMiddleware } from "./middleware/error.middleware";
 import { correlationIdMiddleware } from "./middleware/correlation-id.middleware";
+import type { AuthenticatedRequest } from "./middleware/firebase-auth.middleware";
+import { requireFirebaseAuth } from "./middleware/firebase-auth.middleware";
 import {
-  AuthenticatedRequest,
-  requireFirebaseAuth
-} from "./middleware/firebase-auth.middleware";
-import { createReservationRateLimiter } from "./middleware/rate-limit.middleware";
+  createGlobalRateLimiter,
+  createPurchaseRateLimiter,
+  createReservationRateLimiter
+} from "./middleware/rate-limit.middleware";
 import { requestLoggerMiddleware } from "./middleware/request-logger.middleware";
 import { validateBody } from "./middleware/validate.middleware";
 import { logger } from "./logger/logger";
@@ -47,6 +50,54 @@ function asyncHandler(route: AsyncRoute) {
   };
 }
 
+function passThrough(_request: Request, _response: Response, next: NextFunction) {
+  next();
+}
+
+/** Constant-time comparison so the secret cannot be recovered by timing. */
+function secretsMatch(provided: string | undefined, expected: string): boolean {
+  if (!provided) {
+    return false;
+  }
+
+  const providedBuffer = Buffer.from(provided);
+  const expectedBuffer = Buffer.from(expected);
+
+  if (providedBuffer.length !== expectedBuffer.length) {
+    return false;
+  }
+
+  return timingSafeEqual(providedBuffer, expectedBuffer);
+}
+
+/**
+ * The PWA loads the Firebase compat SDK from gstatic and talks to Google's auth
+ * and messaging endpoints, so it needs an explicit allowlist. Swagger UI ships
+ * inline scripts of its own and is deliberately left outside this policy.
+ */
+const appContentSecurityPolicy = helmet.contentSecurityPolicy({
+  useDefaults: false,
+  directives: {
+    "default-src": ["'self'"],
+    "script-src": ["'self'", "https://www.gstatic.com"],
+    "connect-src": [
+      "'self'",
+      "https://*.googleapis.com",
+      "https://*.google.com",
+      "https://*.firebaseio.com"
+    ],
+    "frame-src": ["https://*.firebaseapp.com", "https://accounts.google.com"],
+    "img-src": ["'self'", "data:"],
+    "style-src": ["'self'", "'unsafe-inline'"],
+    "worker-src": ["'self'"],
+    "manifest-src": ["'self'"],
+    "object-src": ["'none'"],
+    "base-uri": ["'self'"],
+    "form-action": ["'self'"],
+    "frame-ancestors": ["'none'"]
+  }
+});
+
 export interface CreateAppOptions {
   enableRateLimit?: boolean;
   enableLegacyDemoRoutes?: boolean;
@@ -55,12 +106,15 @@ export interface CreateAppOptions {
   rateLimitPrefix?: string;
   firebaseAuthVerifier?: FirebaseAuthVerifier;
   notificationService?: NotificationService;
+  /**
+   * Proxy hops to trust for client IP resolution. Behind the shipped nginx this
+   * must be 1 — with the default of 0, every request appears to come from the
+   * proxy and the whole internet shares a single rate-limit bucket.
+   */
+  trustProxy?: number | boolean | string;
 }
 
-export function createApp(
-  dataSource: DataSource,
-  options: CreateAppOptions = {}
-) {
+export function createApp(dataSource: DataSource, options: CreateAppOptions = {}) {
   const app = express();
   const notificationService =
     options.notificationService ?? new NotificationService(dataSource);
@@ -77,18 +131,38 @@ export function createApp(
     process.env.ENABLE_LEGACY_DEMO_ROUTES === "true";
   const enablePublicCleanup =
     options.enablePublicCleanup ?? process.env.ENABLE_PUBLIC_CLEANUP === "true";
-  const reservationRateLimiter =
-    shouldEnableRateLimit
-      ? createReservationRateLimiter(options.redisClient, options.rateLimitPrefix)
-      : (_request: Request, _response: Response, next: NextFunction) => next();
 
+  const trustProxy =
+    options.trustProxy ?? Number(process.env.TRUST_PROXY_HOPS ?? 0);
+  app.set("trust proxy", trustProxy);
+  app.disable("x-powered-by");
+
+  const globalRateLimiter: RequestHandler = shouldEnableRateLimit
+    ? createGlobalRateLimiter(options.redisClient, options.rateLimitPrefix)
+    : passThrough;
+  const reservationRateLimiter: RequestHandler = shouldEnableRateLimit
+    ? createReservationRateLimiter(options.redisClient, options.rateLimitPrefix)
+    : passThrough;
+  const purchaseRateLimiter: RequestHandler = shouldEnableRateLimit
+    ? createPurchaseRateLimiter(options.redisClient, options.rateLimitPrefix)
+    : passThrough;
+
+  app.use(
+    helmet({
+      // Swagger UI injects inline scripts; /app gets its own policy below.
+      contentSecurityPolicy: false,
+      // Firebase signInWithPopup needs the popup to reach its opener, which a
+      // bare same-origin COOP would block.
+      crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" }
+    })
+  );
   app.use(correlationIdMiddleware);
   app.use(requestLoggerMiddleware);
-  app.use(express.json());
+  app.use(express.json({ limit: "64kb" }));
 
   const publicPath = path.join(__dirname, "public");
   app.get(/^\/app$/, (_request, response) => response.redirect("/app/"));
-  app.use("/app", express.static(publicPath));
+  app.use("/app", appContentSecurityPolicy, express.static(publicPath));
 
   app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
   app.use("/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
@@ -101,15 +175,15 @@ export function createApp(
     const endpoints: Record<string, string> = {
       health: "GET /health",
       healthV1: "GET /api/v1/health",
+      readiness: "GET /health/ready",
+      readinessV1: "GET /api/v1/health/ready",
       concerts: "GET /concerts",
       concertsV1: "GET /api/v1/concerts",
       reserveV1: "POST /api/v1/reserve",
       createTicketV1: "POST /api/v1/tickets",
       purchaseV1: "POST /api/v1/purchase",
-      purchaseOptimisticV1:
-        "POST /api/v1/tickets/:ticketId/purchase-optimistic",
-      purchasePessimisticV1:
-        "POST /api/v1/tickets/:ticketId/purchase-pessimistic",
+      purchaseOptimisticV1: "POST /api/v1/tickets/:ticketId/purchase-optimistic",
+      purchasePessimisticV1: "POST /api/v1/tickets/:ticketId/purchase-pessimistic",
       app: "GET /app",
       firebaseConfig: "GET /api/v1/firebase-config",
       myTickets: "GET /api/v1/me/tickets",
@@ -148,6 +222,7 @@ export function createApp(
   app.get("/", apiIndexHandler);
   app.get("/api/v1", apiIndexHandler);
 
+  /** Liveness: the process is up. Deliberately does no I/O. */
   const healthHandler = (_request: Request, response: Response) => {
     response.json({ status: "ok" });
   };
@@ -155,20 +230,57 @@ export function createApp(
   app.get("/health", healthHandler);
   app.get("/api/v1/health", healthHandler);
 
+  /**
+   * Readiness: the process can actually serve traffic. A liveness probe that
+   * always returns ok lets a release with an unusable database pass its own
+   * smoke test.
+   */
+  const readinessHandler = asyncHandler(async (_request, response) => {
+    const checks: Record<string, "ok" | "unavailable" | "not_configured"> = {
+      database: "ok",
+      redis: options.redisClient ? "ok" : "not_configured"
+    };
+
+    try {
+      await dataSource.query("SELECT 1");
+    } catch (error) {
+      logger.error({ error }, "Readiness probe: database check failed");
+      checks.database = "unavailable";
+    }
+
+    if (options.redisClient) {
+      try {
+        await options.redisClient.ping();
+      } catch (error) {
+        logger.error({ error }, "Readiness probe: Redis check failed");
+        checks.redis = "unavailable";
+      }
+    }
+
+    const ready = !Object.values(checks).includes("unavailable");
+    response.status(ready ? 200 : 503).json({
+      status: ready ? "ready" : "unavailable",
+      checks
+    });
+  });
+
+  app.get("/health/ready", readinessHandler);
+  app.get("/api/v1/health/ready", readinessHandler);
+
   app.get("/api/v1/firebase-config", (_request, response) => {
     response.json(getPublicFirebaseConfig());
   });
 
   const concertsHandler = asyncHandler(async (_request, response) => {
-      const concerts = await dataSource.getRepository(Concert).find({
-        order: { id: "ASC" }
-      });
-
-      response.json(concerts);
+    const concerts = await dataSource.getRepository(Concert).find({
+      order: { id: "ASC" }
     });
 
-  app.get("/concerts", concertsHandler);
-  app.get("/api/v1/concerts", concertsHandler);
+    response.json(concerts);
+  });
+
+  app.get("/concerts", globalRateLimiter, concertsHandler);
+  app.get("/api/v1/concerts", globalRateLimiter, concertsHandler);
 
   /**
    * @openapi
@@ -215,20 +327,29 @@ export function createApp(
    *               $ref: '#/components/schemas/ErrorResponse'
    */
   const ticketsHandler = asyncHandler(async (_request, response) => {
-      const tickets = await dataSource.getRepository(Ticket).find({
-        order: { id: "ASC" }
-      });
-
-      response.json(toTicketDtos(tickets));
+    const tickets = await dataSource.getRepository(Ticket).find({
+      order: { id: "ASC" }
     });
 
+    response.json(toTicketDtos(tickets));
+  });
+
   if (enableLegacyDemoRoutes) {
-    app.get("/tickets", ticketsHandler);
-    app.get("/api/v1/tickets", ticketsHandler);
+    app.get("/tickets", globalRateLimiter, ticketsHandler);
+    app.get("/api/v1/tickets", globalRateLimiter, ticketsHandler);
   }
 
   const reserveHandler = asyncHandler(async (request, response) => {
     const ticket = await reservationService.reserveTickets(request.body);
+    response.status(201).json({ ticket: toTicketDto(ticket) });
+  });
+
+  const authenticatedReserveHandler = asyncHandler(async (request, response) => {
+    const authRequest = request as AuthenticatedRequest;
+    const ticket = await reservationService.reserveTickets({
+      ...request.body,
+      userId: authRequest.authUser.uid
+    });
     response.status(201).json({ ticket: toTicketDto(ticket) });
   });
 
@@ -261,19 +382,16 @@ export function createApp(
       reserveHandler
     );
   }
+  // Rate limiter ahead of auth: otherwise a flood of invalid tokens is rejected
+  // by the auth layer before the limiter ever runs, and each one costs a
+  // Firebase token verification.
   app.post(
     "/api/v1/reserve",
+    globalRateLimiter,
     firebaseAuth,
     reservationRateLimiter,
     validateBody(authenticatedReserveTicketSchema),
-    asyncHandler(async (request, response) => {
-      const authRequest = request as AuthenticatedRequest;
-      const ticket = await reservationService.reserveTickets({
-        ...request.body,
-        userId: authRequest.authUser.uid
-      });
-      response.status(201).json({ ticket: toTicketDto(ticket) });
-    })
+    authenticatedReserveHandler
   );
 
   if (enableLegacyDemoRoutes) {
@@ -286,30 +404,26 @@ export function createApp(
   }
   app.post(
     "/api/v1/tickets",
+    globalRateLimiter,
     firebaseAuth,
     reservationRateLimiter,
     validateBody(authenticatedReserveTicketSchema),
-    asyncHandler(async (request, response) => {
-      const authRequest = request as AuthenticatedRequest;
-      const ticket = await reservationService.reserveTickets({
-        ...request.body,
-        userId: authRequest.authUser.uid
-      });
-      response.status(201).json({ ticket: toTicketDto(ticket) });
-    })
+    authenticatedReserveHandler
   );
 
   const purchaseHandler = asyncHandler(async (request, response) => {
-      const ticket = await purchaseService.purchaseTicket(request.body);
-      response.json({ ticket: toTicketDto(ticket) });
-    });
+    const ticket = await purchaseService.purchaseTicket(request.body);
+    response.json({ ticket: toTicketDto(ticket) });
+  });
 
   if (enableLegacyDemoRoutes) {
     app.post("/purchase", validateBody(purchaseTicketSchema), purchaseHandler);
   }
   app.post(
     "/api/v1/purchase",
+    globalRateLimiter,
     firebaseAuth,
+    purchaseRateLimiter,
     validateBody(authenticatedPurchaseTicketSchema),
     asyncHandler(async (request, response) => {
       const authRequest = request as AuthenticatedRequest;
@@ -361,7 +475,9 @@ export function createApp(
   }
   app.post(
     "/api/v1/tickets/:ticketId/purchase-optimistic",
+    globalRateLimiter,
     firebaseAuth,
+    purchaseRateLimiter,
     validateBody(authenticatedPurchaseTicketSchema.omit({ ticketId: true })),
     asyncHandler(async (request, response) => {
       const authRequest = request as AuthenticatedRequest;
@@ -415,7 +531,9 @@ export function createApp(
   }
   app.post(
     "/api/v1/tickets/:ticketId/purchase-pessimistic",
+    globalRateLimiter,
     firebaseAuth,
+    purchaseRateLimiter,
     validateBody(authenticatedPurchaseTicketSchema.omit({ ticketId: true })),
     asyncHandler(async (request, response) => {
       const authRequest = request as AuthenticatedRequest;
@@ -444,6 +562,7 @@ export function createApp(
    */
   app.get(
     "/api/v1/me/tickets",
+    globalRateLimiter,
     firebaseAuth,
     asyncHandler(async (request, response) => {
       const authRequest = request as AuthenticatedRequest;
@@ -477,6 +596,7 @@ export function createApp(
    */
   app.post(
     "/api/v1/me/fcm-tokens",
+    globalRateLimiter,
     firebaseAuth,
     validateBody(fcmTokenSchema),
     asyncHandler(async (request, response) => {
@@ -499,6 +619,7 @@ export function createApp(
 
   app.delete(
     "/api/v1/me/fcm-tokens",
+    globalRateLimiter,
     firebaseAuth,
     validateBody(fcmTokenSchema),
     asyncHandler(async (request, response) => {
@@ -514,6 +635,7 @@ export function createApp(
 
   app.post(
     "/api/v1/debug/concurrency-error",
+    globalRateLimiter,
     asyncHandler(async (request) => {
       const debugSecret = process.env.DEBUG_SECRET;
 
@@ -521,7 +643,7 @@ export function createApp(
         throw new AppError(404, "NOT_FOUND", "Not found");
       }
 
-      if (request.header("X-Debug-Secret") !== debugSecret) {
+      if (!secretsMatch(request.header("X-Debug-Secret"), debugSecret)) {
         throw new AppError(403, "FORBIDDEN", "Forbidden");
       }
 
@@ -536,9 +658,9 @@ export function createApp(
   );
 
   const cleanupHandler = asyncHandler(async (_request, response) => {
-      const cleanupResult = await cleanupService.cleanupExpiredReservations();
-      response.json(cleanupResult);
-    });
+    const cleanupResult = await cleanupService.cleanupExpiredReservations();
+    response.json(cleanupResult);
+  });
 
   if (enablePublicCleanup) {
     app.post("/cleanup", cleanupHandler);

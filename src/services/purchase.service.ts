@@ -1,4 +1,4 @@
-import { DataSource } from "typeorm";
+import type { DataSource } from "typeorm";
 import { Ticket } from "../entities/Ticket";
 import { TicketStatus } from "../entities/TicketStatus";
 import { AppError, ConcurrencyError } from "../errors/AppError";
