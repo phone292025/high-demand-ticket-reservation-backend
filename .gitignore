@@ -6,3 +6,6 @@ database.sqlite
 database.sqlite-*
 data/
 *.log
+
+.vercel-static/
+.vercel/

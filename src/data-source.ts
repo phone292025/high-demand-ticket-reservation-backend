@@ -1,6 +1,7 @@
 import "reflect-metadata";
 import path from "node:path";
-import { DataSource, DataSourceOptions } from "typeorm";
+import type { DataSourceOptions } from "typeorm";
+import { DataSource } from "typeorm";
 import { Concert } from "./entities/Concert";
 import { FcmToken } from "./entities/FcmToken";
 import { Ticket } from "./entities/Ticket";
@@ -9,6 +10,7 @@ import { CreateConcertsAndTickets1710000000000 } from "./migrations/171000000000
 import { AddCategoryToTicket1710000000001 } from "./migrations/1710000000001-AddCategoryToTicket";
 import { AddDay3TicketHardeningColumns1710000000002 } from "./migrations/1710000000002-AddDay3TicketHardeningColumns";
 import { AddFirebasePwaNotifications1710000000003 } from "./migrations/1710000000003-AddFirebasePwaNotifications";
+import { AddNotificationRetriesAndStockGuards1710000000004 } from "./migrations/1710000000004-AddNotificationRetriesAndStockGuards";
 
 export function buildDataSourceOptions(database?: string): DataSourceOptions {
   return {
@@ -22,7 +24,8 @@ export function buildDataSourceOptions(database?: string): DataSourceOptions {
       CreateConcertsAndTickets1710000000000,
       AddCategoryToTicket1710000000001,
       AddDay3TicketHardeningColumns1710000000002,
-      AddFirebasePwaNotifications1710000000003
+      AddFirebasePwaNotifications1710000000003,
+      AddNotificationRetriesAndStockGuards1710000000004
     ],
     synchronize: false,
     logging: process.env.TYPEORM_LOGGING === "true"

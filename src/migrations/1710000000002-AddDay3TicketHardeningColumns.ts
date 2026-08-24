@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from "typeorm";
 
-export class AddDay3TicketHardeningColumns1710000000002
-  implements MigrationInterface
-{
+export class AddDay3TicketHardeningColumns1710000000002 implements MigrationInterface {
   name = "AddDay3TicketHardeningColumns1710000000002";
 
   public async up(queryRunner: QueryRunner): Promise<void> {

@@ -1,4 +1,4 @@
-import { NotificationService } from "../services/notification.service";
+import type { NotificationService } from "../services/notification.service";
 import { logger } from "../logger/logger";
 
 export interface NotificationWorker {

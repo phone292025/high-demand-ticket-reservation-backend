@@ -1,4 +1,4 @@
-import { AddressInfo } from "node:net";
+import type { AddressInfo } from "node:net";
 import { createApp } from "../app";
 import { createDataSource, initializeDataSource } from "../data-source";
 

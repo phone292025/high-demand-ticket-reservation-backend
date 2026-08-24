@@ -93,6 +93,17 @@ RUN_MIGRATIONS_ON_START=true
 SEED_ON_START=true
 ```
 
+### The Render free plan has no persistent disk
+
+The free instance type gives no attached disk, so `/app/data/database.sqlite`
+lives in the container filesystem. **Every deploy and every idle spin-down
+starts from an empty database.** Concerts reappear because they are re-seeded
+on boot; reservations, purchases, and FCM registrations do not. Disappearing
+tickets on the Render demo are the hosting plan, not a bug in the reservation
+logic.
+
+For durable data, attach a Render disk (paid) or move to Postgres.
+
 ## Production Launch
 
 The final production shape is one larger EC2 instance in `ap-southeast-1`:
@@ -389,6 +400,94 @@ Global error response format:
 }
 ```
 
+## Production Hardening Pass
+
+A full audit of the repository turned up twenty findings; all are fixed. The
+three at the top were correct on localhost and wrong under the deployment setup
+this repo ships, and none were visible from the passing test suite.
+
+### Breaks in production
+
+**Proxy-aware client IPs.** Express defaults `trust proxy` to `false`, so behind
+the shipped nginx every request resolved to the proxy socket address and
+`express-rate-limit` keyed them all to one bucket — the intended 5 reservations
+per minute _per user_ was 5 per minute for the entire internet. The app now
+reads `TRUST_PROXY_HOPS` (1 behind nginx and Render, 0 for a direct local run),
+and `rate-limit.test.ts` asserts that distinct forwarded clients get distinct
+buckets.
+
+**Scheduled reservation cleanup.** `CleanupService` was correct and tested, but
+its only caller was `POST /cleanup`, which is disabled in production. Abandoned
+reservations therefore held their stock forever. `startCleanupWorker` now runs
+the sweep on an interval next to the notification worker, and a test proves
+stock returns without anyone calling the route.
+
+**API docs in the container.** `swagger-jsdoc` was pointed at `src/app.ts`, a
+path resolved against the working directory — and the runtime image ships only
+`dist`. Every route annotation was silently dropped, so `/docs` rendered zero
+endpoints in production. Paths are now resolved relative to the module.
+
+### Degrades under real use
+
+- **Firebase ID token refresh.** The web app captured one token at sign-in and
+  reused it forever; tokens expire after an hour, so every call 401'd until the
+  user reloaded. `apiFetch` now asks the SDK for a token per request.
+- **Honest push delivery.** `sendEachForMulticast` resolves even when every
+  token fails. The per-token results are now inspected: rows are marked `SENT`
+  only if at least one token succeeded, permanently invalid tokens are pruned,
+  and failures retry up to `MAX_NOTIFICATION_ATTEMPTS` before going terminal.
+- **Rate limiter ahead of auth.** Auth used to run first, so unauthenticated
+  floods bypassed throttling entirely while costing a Firebase verification
+  each. A global limiter now fronts the router.
+- **Security headers.** `helmet()` plus a Firebase-aware CSP scoped to `/app`
+  (Swagger UI ships inline scripts and stays outside it), and `X-Powered-By` is
+  off. COOP is `same-origin-allow-popups` so Google sign-in still works.
+- **Dependencies.** 30 advisories (1 critical, 9 high) down to 6 moderate, none
+  high or critical: `typeorm` 0.3.31, `sqlite3` 6, `firebase-admin` 14. CI now
+  fails on `npm audit --omit=dev --audit-level=high`.
+
+### Correctness and operations
+
+- `tickets (userId, id)` is indexed — `GET /api/v1/me/tickets` was the last hot
+  query still doing a full table scan.
+- Graceful shutdown stops background workers _before_ destroying the
+  DataSource, handles `SIGINT` as well as `SIGTERM`, and force-exits on a timer
+  so a keep-alive connection cannot hang the container into a `SIGKILL`.
+- TypeORM `OptimisticLockVersionMismatchError` and `SQLITE_BUSY` now map to 409
+  instead of 500, so an ordinary lost race stops paging Sentry.
+- Stock arithmetic uses bound parameters instead of string interpolation.
+- Database triggers enforce `0 <= availableStock <= totalStock`, so oversell is
+  impossible at the storage layer, not only in application code.
+- `GET /health/ready` checks the database and Redis and returns 503 when either
+  is unusable; the Dockerfile healthcheck and the deploy smoke test both gate on
+  it rather than on the unconditional `/health`.
+- The debug secret is compared with `crypto.timingSafeEqual`, and FCM
+  registrations are capped per user.
+
+### Guardrails
+
+ESLint with `typescript-eslint`, a Jest coverage threshold, and the one test
+suite split into nine by concern. CI runs lint, type check, build, coverage, and
+the production audit on every push and pull request.
+
+## Where This Runs
+
+| Surface | Hosts                          | Notes                                                                                                                 |
+| ------- | ------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| Vercel  | The PWA at `/app`, on the CDN  | `/api/*` and `/docs/*` are rewritten to the Render backend, so the browser stays same-origin and no CORS is involved. |
+| Render  | The Express API and SQLite     | Free plan: no persistent disk, see the caveat above.                                                                  |
+| EC2     | nginx + Docker Compose + Redis | The full production shape, deployed manually from GitHub Actions.                                                     |
+
+The stateful API is deliberately **not** deployed to Vercel. Oversell
+prevention depends on one process holding a write mutex over one SQLite file;
+serverless functions have an ephemeral per-instance `/tmp`, no shared
+filesystem, and no long-lived `setInterval`, so the cleanup and notification
+workers would never run and the concurrency guarantee would not hold.
+
+If the Render service is renamed, update the two rewrite destinations in
+`vercel.json`, and add the Vercel domain to the Firebase console's authorized
+domains so Google sign-in works there.
+
 ## Hardening
 
 ### Correlation IDs And Logging
@@ -455,14 +554,7 @@ Actual result from the latest run:
 {
   "scenario": "Six reservation requests within one minute",
   "expected": "First five allowed, sixth returns 429 RATE_LIMITED",
-  "statuses": [
-    201,
-    201,
-    201,
-    201,
-    201,
-    429
-  ],
+  "statuses": [201, 201, 201, 201, 201, 429],
   "sixthResponse": {
     "status": 429,
     "body": {
@@ -526,7 +618,7 @@ The server handles `SIGTERM` by stopping new requests, waiting 5 seconds for in-
 TypeORM is configured with:
 
 ```ts
-synchronize: false
+synchronize: false;
 ```
 
 Schema changes are handled by migrations in `src/migrations`:
@@ -680,10 +772,17 @@ The integration tests cover:
 Latest test output:
 
 ```text
-Test Suites: 1 passed, 1 total
-Tests:       35 passed, 35 total
+Test Suites: 9 passed, 9 total
+Tests:       71 passed, 71 total
 Snapshots:   0 total
+
+Statements   : 93.15%
+Branches     : 81.48%
+Functions    : 91.40%
+Lines        : 93.28%
 ```
+
+Coverage thresholds are enforced in `jest.config.js`; CI fails below them.
 
 Latest Docker smoke test:
 

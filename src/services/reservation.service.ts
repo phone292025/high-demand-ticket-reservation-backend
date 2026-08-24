@@ -1,10 +1,10 @@
-import { DataSource } from "typeorm";
+import type { DataSource } from "typeorm";
 import { Concert } from "../entities/Concert";
 import { Ticket } from "../entities/Ticket";
 import { TicketStatus } from "../entities/TicketStatus";
 import { AppError } from "../errors/AppError";
 import { logger } from "../logger/logger";
-import { NotificationService } from "./notification.service";
+import type { NotificationService } from "./notification.service";
 import { reservationExpiry } from "../utils/date";
 import { runWriteTransaction } from "../utils/transaction";
 
@@ -31,46 +31,55 @@ export class ReservationService {
   ): Promise<Ticket> {
     this.validateInput(input);
 
-    const ticket = await runWriteTransaction(this.dataSource, async (queryRunner) => {
-      const updateResult = await queryRunner.manager
-        .createQueryBuilder()
-        .update(Concert)
-        .set({ availableStock: () => `"availableStock" - ${input.quantity}` })
-        .where("id = :concertId", { concertId: input.concertId })
-        .andWhere("availableStock >= :quantity", { quantity: input.quantity })
-        .execute();
+    const ticket = await runWriteTransaction(
+      this.dataSource,
+      async (queryRunner) => {
+        const updateResult = await queryRunner.manager
+          .createQueryBuilder()
+          .update(Concert)
+          // Bound parameter, not interpolation: the value is validated upstream,
+          // but the raw fragment must not depend on that staying true.
+          .set({ availableStock: () => `"availableStock" - :reservedQuantity` })
+          .where("id = :concertId", { concertId: input.concertId })
+          .andWhere("availableStock >= :quantity", { quantity: input.quantity })
+          .setParameter("reservedQuantity", input.quantity)
+          .execute();
 
-      if ((updateResult.affected ?? 0) === 0) {
-        const concertExists = await queryRunner.manager.exists(Concert, {
-          where: { id: input.concertId }
-        });
+        if ((updateResult.affected ?? 0) === 0) {
+          const concertExists = await queryRunner.manager.exists(Concert, {
+            where: { id: input.concertId }
+          });
 
-        if (!concertExists) {
-          throw new AppError(404, "NOT_FOUND", "Concert not found");
+          if (!concertExists) {
+            throw new AppError(404, "NOT_FOUND", "Concert not found");
+          }
+
+          throw new AppError(409, "SOLD_OUT", "Sold Out");
         }
 
-        throw new AppError(409, "SOLD_OUT", "Sold Out");
+        const ticket = queryRunner.manager.create(Ticket, {
+          concertId: input.concertId,
+          userId: input.userId.trim(),
+          status: options.forceTicketSaveFailure
+            ? ("INVALID_STATUS" as TicketStatus)
+            : TicketStatus.Pending,
+          expiresAt: reservationExpiry(),
+          category: input.category?.trim() || "General",
+          quantity: input.quantity
+        });
+
+        return queryRunner.manager.save(Ticket, ticket);
       }
-
-      const ticket = queryRunner.manager.create(Ticket, {
-        concertId: input.concertId,
-        userId: input.userId.trim(),
-        status: options.forceTicketSaveFailure
-          ? ("INVALID_STATUS" as TicketStatus)
-          : TicketStatus.Pending,
-        expiresAt: reservationExpiry(),
-        category: input.category?.trim() || "General",
-        quantity: input.quantity
-      });
-
-      return queryRunner.manager.save(Ticket, ticket);
-    });
+    );
 
     if (this.notificationService) {
       await this.notificationService
         .scheduleExpirationWarning(ticket)
         .catch((error) => {
-          logger.error({ error, ticketId: ticket.id }, "Failed to schedule FCM warning");
+          logger.error(
+            { error, ticketId: ticket.id },
+            "Failed to schedule FCM warning"
+          );
         });
     }
 
@@ -97,7 +106,11 @@ export class ReservationService {
       throw new AppError(400, "VALIDATION_ERROR", "userId is required");
     }
 
-    if (!Number.isInteger(input.quantity) || input.quantity < 1 || input.quantity > 5) {
+    if (
+      !Number.isInteger(input.quantity) ||
+      input.quantity < 1 ||
+      input.quantity > 5
+    ) {
       throw new AppError(
         400,
         "VALIDATION_ERROR",
