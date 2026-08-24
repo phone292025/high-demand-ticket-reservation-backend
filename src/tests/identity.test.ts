@@ -158,4 +158,37 @@ describe("Authentication and per-user resources", () => {
     // The three earliest registrations are the ones dropped.
     expect(tokens[0].token).toBe("fcm-token-value-with-enough-length-3");
   });
+
+  it("enforces the cap when a token is reassigned to another user", async () => {
+    // Fill the second user to exactly the cap.
+    for (let index = 0; index < MAX_FCM_TOKENS_PER_USER; index += 1) {
+      await request(harness.app)
+        .post("/api/v1/me/fcm-tokens")
+        .set("Authorization", "Bearer other_token")
+        .send({ token: `other-token-with-enough-length-${index}` })
+        .expect(201);
+    }
+
+    // A token owned by someone else now moves onto that full account. This is
+    // the reassign path, which used to skip eviction entirely.
+    await request(harness.app)
+      .post("/api/v1/me/fcm-tokens")
+      .set("Authorization", "Bearer owner_token")
+      .send({ token: "shared-device-token-with-enough-length" })
+      .expect(201);
+    await request(harness.app)
+      .post("/api/v1/me/fcm-tokens")
+      .set("Authorization", "Bearer other_token")
+      .send({ token: "shared-device-token-with-enough-length" })
+      .expect(201);
+
+    const tokens = await harness.dataSource
+      .getRepository(FcmToken)
+      .find({ where: { userId: "firebase_other" } });
+
+    expect(tokens).toHaveLength(MAX_FCM_TOKENS_PER_USER);
+    expect(tokens.map((token) => token.token)).toContain(
+      "shared-device-token-with-enough-length"
+    );
+  });
 });

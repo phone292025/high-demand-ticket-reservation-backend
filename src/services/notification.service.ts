@@ -45,6 +45,12 @@ export const MAX_NOTIFICATION_ATTEMPTS = 3;
 export const MAX_FCM_TOKENS_PER_USER = 10;
 
 /**
+ * Ceiling on rows deleted per registration. A user who somehow holds thousands
+ * of tokens is trimmed over several calls instead of in one huge DELETE.
+ */
+const MAX_EVICTIONS_PER_REGISTRATION = 100;
+
+/**
  * FCM error codes that mean the token will never work again, as opposed to a
  * transient delivery failure worth retrying.
  */
@@ -108,17 +114,16 @@ export class NotificationService {
       where: { token: trimmedToken }
     });
 
-    if (existingToken) {
-      existingToken.userId = userId;
-      return tokenRepository.save(existingToken);
-    }
-
-    const savedToken = await tokenRepository.save(
-      tokenRepository.create({
-        userId,
-        token: trimmedToken
-      })
-    );
+    // Reassigning an existing token to another user grows that user's set just
+    // as much as inserting one, so both paths have to enforce the cap.
+    const savedToken = existingToken
+      ? await tokenRepository.save(Object.assign(existingToken, { userId }))
+      : await tokenRepository.save(
+          tokenRepository.create({
+            userId,
+            token: trimmedToken
+          })
+        );
 
     await this.evictOldestTokensOverLimit(userId);
     return savedToken;
@@ -138,18 +143,23 @@ export class NotificationService {
    */
   private async evictOldestTokensOverLimit(userId: string): Promise<void> {
     const tokenRepository = this.dataSource.getRepository(FcmToken);
-    const tokens = await tokenRepository.find({
-      where: { userId },
-      order: { id: "DESC" }
-    });
 
-    if (tokens.length <= MAX_FCM_TOKENS_PER_USER) {
+    // Read only the rows past the cap rather than the user's whole set: a
+    // history of imports can leave far more registrations than the limit.
+    const staleTokens = await tokenRepository
+      .createQueryBuilder("fcmToken")
+      .select("fcmToken.id")
+      .where("fcmToken.userId = :userId", { userId })
+      .orderBy("fcmToken.id", "DESC")
+      .skip(MAX_FCM_TOKENS_PER_USER)
+      .take(MAX_EVICTIONS_PER_REGISTRATION)
+      .getMany();
+
+    if (staleTokens.length === 0) {
       return;
     }
 
-    const staleTokenIds = tokens
-      .slice(MAX_FCM_TOKENS_PER_USER)
-      .map((token) => token.id);
+    const staleTokenIds = staleTokens.map((token) => token.id);
 
     await tokenRepository.delete({ id: In(staleTokenIds) });
     logger.info(

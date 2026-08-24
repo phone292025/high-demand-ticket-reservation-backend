@@ -1,5 +1,9 @@
 import request from "supertest";
 import type { Concert } from "../entities/Concert";
+import {
+  DEFAULT_RATE_LIMIT_PREFIX,
+  rateLimitPrefix
+} from "../middleware/rate-limit.middleware";
 import type { TestHarness } from "./helpers/test-harness";
 import { createTestHarness } from "./helpers/test-harness";
 
@@ -152,5 +156,32 @@ describe("Rate limiting", () => {
       .expect(200);
 
     expect(purchaseResponse.body.ticket.status).toBe("COMPLETED");
+  });
+});
+
+describe("Rate limiter namespacing", () => {
+  it("gives each limiter a distinct namespace under a shared base prefix", () => {
+    const base = "shared-base:";
+    const prefixes = ["global", "reserve", "purchase"].map((name) =>
+      rateLimitPrefix(base, name)
+    );
+
+    // A single shared prefix would make all three limiters increment the same
+    // Redis counter for one uid, so reserve traffic would eat purchase budget.
+    expect(new Set(prefixes).size).toBe(3);
+    for (const prefix of prefixes) {
+      expect(prefix.startsWith(base)).toBe(true);
+    }
+    expect(prefixes).toEqual([
+      "shared-base:global:",
+      "shared-base:reserve:",
+      "shared-base:purchase:"
+    ]);
+  });
+
+  it("namespaces under the default base when none is given", () => {
+    expect(rateLimitPrefix(DEFAULT_RATE_LIMIT_PREFIX, "reserve")).toBe(
+      "ticket-rate-limit:reserve:"
+    );
   });
 });
