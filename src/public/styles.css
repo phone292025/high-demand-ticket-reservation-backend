@@ -10,12 +10,7 @@
   --accent-dark: #115e59;
   --danger: #b42318;
   --shadow: 0 24px 70px -42px rgba(15, 23, 42, 0.48);
-  font-family:
-    "Geist",
-    "Satoshi",
-    "Aptos",
-    system-ui,
-    sans-serif;
+  font-family: "Geist", "Satoshi", "Aptos", system-ui, sans-serif;
 }
 
 * {

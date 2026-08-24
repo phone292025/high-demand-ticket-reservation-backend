@@ -58,7 +58,13 @@
       </header>
 
       <main>
-        <section id="alert" class="alert" role="status" aria-live="polite" hidden></section>
+        <section
+          id="alert"
+          class="alert"
+          role="status"
+          aria-live="polite"
+          hidden
+        ></section>
 
         <section class="dashboard-grid" aria-label="Ticket dashboard">
           <article class="panel concerts-panel">
@@ -67,7 +73,9 @@
                 <p class="eyebrow">Browse</p>
                 <h2>Concerts</h2>
               </div>
-              <button id="refreshButton" class="ghost-button" type="button">Refresh</button>
+              <button id="refreshButton" class="ghost-button" type="button">
+                Refresh
+              </button>
             </div>
             <div id="concertsList" class="list-zone" aria-live="polite"></div>
           </article>
@@ -90,7 +98,15 @@
               </label>
               <label>
                 <span>Quantity</span>
-                <input id="quantityInput" name="quantity" type="number" min="1" max="5" value="1" required />
+                <input
+                  id="quantityInput"
+                  name="quantity"
+                  type="number"
+                  min="1"
+                  max="5"
+                  value="1"
+                  required
+                />
               </label>
               <button id="reserveButton" class="primary-button wide" type="submit">
                 Reserve tickets
@@ -103,10 +119,14 @@
             <div class="notification-box">
               <p class="eyebrow">Notifications</p>
               <p>
-                Register this browser for Firebase Cloud Messaging so expiry warnings
-                can reach you before a hold runs out.
+                Register this browser for Firebase Cloud Messaging so expiry
+                warnings can reach you before a hold runs out.
               </p>
-              <button id="notificationButton" class="ghost-button wide" type="button">
+              <button
+                id="notificationButton"
+                class="ghost-button wide"
+                type="button"
+              >
                 Enable reminders
               </button>
             </div>

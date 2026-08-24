@@ -6,6 +6,7 @@ COPY package*.json ./
 RUN npm ci
 
 COPY tsconfig.json ./
+COPY scripts ./scripts
 COPY src ./src
 RUN npm run build
 RUN npm prune --omit=dev
@@ -26,5 +27,10 @@ RUN mkdir -p /app/data && chown -R node:node /app
 USER node
 
 EXPOSE 3000
+
+# Readiness, not liveness: a container whose database is unusable must not be
+# reported healthy.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/health/ready').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 CMD ["node", "dist/server.js"]

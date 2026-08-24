@@ -1,4 +1,11 @@
-const CACHE_NAME = "ticket-hold-desk-v1";
+/**
+ * The build id below is stamped in by `npm run copy:public`. A hardcoded cache
+ * name meant installed clients kept serving the old bundle forever, because
+ * nothing ever invalidated the entry.
+ */
+const BUILD_ID = "__BUILD_ID__";
+const CACHE_NAME = `ticket-hold-desk-${BUILD_ID}`;
+const DATA_CACHE = `ticket-hold-desk-data-${BUILD_ID}`;
 const APP_SHELL = [
   "/app/",
   "/app/index.html",
@@ -7,12 +14,15 @@ const APP_SHELL = [
   "/app/manifest.webmanifest",
   "/app/icon.svg"
 ];
-const DATA_CACHE = "ticket-hold-desk-data-v1";
 
 async function configureFirebaseMessaging() {
   try {
-    importScripts("https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js");
-    importScripts("https://www.gstatic.com/firebasejs/10.14.1/firebase-messaging-compat.js");
+    importScripts(
+      "https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"
+    );
+    importScripts(
+      "https://www.gstatic.com/firebasejs/10.14.1/firebase-messaging-compat.js"
+    );
 
     const response = await fetch("/api/v1/firebase-config");
     const config = await response.json();
@@ -28,7 +38,8 @@ async function configureFirebaseMessaging() {
       const messaging = firebase.messaging();
       messaging.onBackgroundMessage((payload) => {
         const title = payload.notification?.title || "Reservation update";
-        const body = payload.notification?.body || "Your ticket reservation changed.";
+        const body =
+          payload.notification?.body || "Your ticket reservation changed.";
         self.registration.showNotification(title, {
           body,
           icon: "/app/icon.svg",
@@ -43,9 +54,7 @@ async function configureFirebaseMessaging() {
 }
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL))
-  );
+  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));
   self.skipWaiting();
 });
 
@@ -60,16 +69,36 @@ self.addEventListener("activate", (event) => {
             .map((key) => caches.delete(key))
         )
       )
+      .then(() => self.clients.claim())
+      .then(() => configureFirebaseMessaging())
   );
-  self.clients.claim();
-  event.waitUntil(configureFirebaseMessaging());
 });
+
+/**
+ * Serve the cached copy immediately, then refresh it in the background so the
+ * next load picks up a new deploy. Falls back to the network on a cold cache.
+ */
+async function staleWhileRevalidate(request, cacheName) {
+  const cache = await caches.open(cacheName);
+  const cachedResponse = await cache.match(request);
+
+  const networkFetch = fetch(request)
+    .then((response) => {
+      if (response && response.ok) {
+        cache.put(request, response.clone());
+      }
+      return response;
+    })
+    .catch(() => undefined);
+
+  return cachedResponse || (await networkFetch) || Response.error();
+}
 
 self.addEventListener("fetch", (event) => {
   const request = event.request;
   const url = new URL(request.url);
 
-  if (request.method !== "GET") {
+  if (request.method !== "GET" || url.origin !== self.location.origin) {
     return;
   }
 
@@ -77,8 +106,10 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetch(request)
         .then(async (response) => {
-          const cache = await caches.open(DATA_CACHE);
-          cache.put(request, response.clone());
+          if (response && response.ok) {
+            const cache = await caches.open(DATA_CACHE);
+            cache.put(request, response.clone());
+          }
           return response;
         })
         .catch(async () => {
@@ -94,19 +125,8 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  if (url.pathname.startsWith("/app/")) {
-    event.respondWith(
-      caches.match(request).then((cachedResponse) => {
-        return (
-          cachedResponse ||
-          fetch(request).then(async (response) => {
-            const cache = await caches.open(CACHE_NAME);
-            cache.put(request, response.clone());
-            return response;
-          })
-        );
-      })
-    );
+  if (url.pathname === "/app" || url.pathname.startsWith("/app/")) {
+    event.respondWith(staleWhileRevalidate(request, CACHE_NAME));
   }
 });
 

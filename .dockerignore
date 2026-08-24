@@ -8,3 +8,5 @@ database.sqlite
 database.sqlite-*
 *.log
 npm-debug.log*
+.vercel-static
+.vercel

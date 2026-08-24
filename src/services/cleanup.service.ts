@@ -1,4 +1,5 @@
-import { DataSource, In } from "typeorm";
+import type { DataSource } from "typeorm";
+import { In } from "typeorm";
 import { Concert } from "../entities/Concert";
 import { Ticket } from "../entities/Ticket";
 import { TicketStatus } from "../entities/TicketStatus";
@@ -49,12 +50,13 @@ export class CleanupService {
           .set({
             availableStock: () =>
               `CASE
-                WHEN "availableStock" + ${Number(releasedCount)} > "totalStock"
+                WHEN "availableStock" + :releasedCount > "totalStock"
                 THEN "totalStock"
-                ELSE "availableStock" + ${Number(releasedCount)}
+                ELSE "availableStock" + :releasedCount
               END`
           })
           .where("id = :concertId", { concertId: Number(concertId) })
+          .setParameter("releasedCount", Number(releasedCount))
           .execute();
       }
 

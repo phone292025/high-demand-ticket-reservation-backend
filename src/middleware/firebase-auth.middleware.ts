@@ -1,6 +1,6 @@
-import { NextFunction, Request, Response } from "express";
+import type { NextFunction, Request, Response } from "express";
 import { AppError } from "../errors/AppError";
-import { FirebaseAuthVerifier, FirebaseUser } from "../auth/firebase-admin";
+import type { FirebaseAuthVerifier, FirebaseUser } from "../auth/firebase-admin";
 
 export interface AuthenticatedRequest extends Request {
   authUser: FirebaseUser;

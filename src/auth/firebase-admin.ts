@@ -1,40 +1,23 @@
-import { applicationDefault, cert, getApps, initializeApp } from "firebase-admin/app";
-import { DecodedIdToken, getAuth } from "firebase-admin/auth";
+import {
+  applicationDefault,
+  cert,
+  getApps,
+  initializeApp
+} from "firebase-admin/app";
+import type { DecodedIdToken } from "firebase-admin/auth";
+import { getAuth } from "firebase-admin/auth";
 import { getMessaging } from "firebase-admin/messaging";
+import type { FirebaseAuthVerifier, FirebaseUser } from "./firebase-config";
 
-export interface FirebaseUser {
-  uid: string;
-  email?: string;
-  name?: string;
-  picture?: string;
-}
-
-export interface FirebaseAuthVerifier {
-  verifyIdToken(idToken: string): Promise<FirebaseUser>;
-}
-
-export interface PublicFirebaseConfig {
-  apiKey: string;
-  authDomain: string;
-  projectId: string;
-  messagingSenderId: string;
-  appId: string;
-  vapidKey: string;
-}
+export {
+  FirebaseAuthVerifier,
+  FirebaseUser,
+  PublicFirebaseConfig,
+  getPublicFirebaseConfig
+} from "./firebase-config";
 
 function normalizePrivateKey(privateKey: string): string {
   return privateKey.replace(/\\n/g, "\n");
-}
-
-export function getPublicFirebaseConfig(): Partial<PublicFirebaseConfig> {
-  return {
-    apiKey: process.env.FIREBASE_WEB_API_KEY,
-    authDomain: process.env.FIREBASE_AUTH_DOMAIN,
-    projectId: process.env.FIREBASE_PROJECT_ID,
-    messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
-    appId: process.env.FIREBASE_APP_ID,
-    vapidKey: process.env.FIREBASE_VAPID_KEY
-  };
 }
 
 export function initializeFirebaseAdmin(): boolean {

@@ -1,4 +1,4 @@
-import { Ticket } from "../entities/Ticket";
+import type { Ticket } from "../entities/Ticket";
 
 export interface TicketDto {
   id: number;

@@ -19,6 +19,7 @@ import { TicketStatus } from "./TicketStatus";
   `"status" IN ('PENDING', 'COMPLETED', 'EXPIRED', 'CANCELLED')`
 )
 @Index("idx_tickets_concert_id", ["concertId"])
+@Index("idx_tickets_user_id", ["userId", "id"])
 @Index("idx_tickets_pending_expires", ["expiresAt"], {
   where: `status = 'PENDING'`
 })

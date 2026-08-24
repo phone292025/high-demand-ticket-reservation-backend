@@ -48,6 +48,9 @@ export class TicketNotification {
   @Column({ type: "datetime", nullable: true })
   skippedAt!: Date | null;
 
+  @Column({ type: "integer", default: 0 })
+  attempts!: number;
+
   @Column({ type: "varchar", nullable: true })
   error!: string | null;
 

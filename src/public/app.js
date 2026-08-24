@@ -5,7 +5,6 @@ const state = {
   serviceWorkerRegistration: null,
   currentUser: null,
   lastUserId: null,
-  idToken: null,
   concerts: [],
   tickets: [],
   deferredInstallPrompt: null
@@ -112,19 +111,43 @@ async function loadScript(src) {
 }
 
 async function loadFirebaseSdk() {
-  await loadScript("https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js");
-  await loadScript("https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js");
-  await loadScript("https://www.gstatic.com/firebasejs/10.14.1/firebase-messaging-compat.js");
+  await loadScript(
+    "https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"
+  );
+  await loadScript(
+    "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"
+  );
+  await loadScript(
+    "https://www.gstatic.com/firebasejs/10.14.1/firebase-messaging-compat.js"
+  );
 }
 
 function hasFirebaseConfig(config) {
   return Boolean(
     config?.apiKey &&
-      config?.authDomain &&
-      config?.projectId &&
-      config?.messagingSenderId &&
-      config?.appId
+    config?.authDomain &&
+    config?.projectId &&
+    config?.messagingSenderId &&
+    config?.appId
   );
+}
+
+/**
+ * Firebase ID tokens expire after an hour. The SDK refreshes them on demand and
+ * returns a cached copy otherwise, so this has to be asked for per request --
+ * holding one leaves every call 401ing until the user reloads the page.
+ */
+async function currentIdToken() {
+  if (!state.currentUser) {
+    return null;
+  }
+
+  try {
+    return await state.currentUser.getIdToken();
+  } catch (error) {
+    console.warn("Could not refresh the Firebase ID token", error);
+    return null;
+  }
 }
 
 async function apiFetch(path, options = {}) {
@@ -133,8 +156,10 @@ async function apiFetch(path, options = {}) {
     ...(options.headers || {})
   };
 
-  if (state.idToken) {
-    headers.Authorization = `Bearer ${state.idToken}`;
+  const idToken = await currentIdToken();
+
+  if (idToken) {
+    headers.Authorization = `Bearer ${idToken}`;
   }
 
   const response = await fetch(path, {
@@ -237,7 +262,9 @@ function updateOnlineState() {
   elements.refreshButton.disabled = !online;
 
   if (!online) {
-    showAlert("You are offline. Cached concerts and tickets are available, but reserve and purchase actions are disabled.");
+    showAlert(
+      "You are offline. Cached concerts and tickets are available, but reserve and purchase actions are disabled."
+    );
   }
 
   renderTickets();
@@ -251,7 +278,7 @@ async function refreshConcerts() {
 }
 
 async function refreshTickets() {
-  if (!state.currentUser || !state.idToken) {
+  if (!state.currentUser) {
     state.tickets = [];
     renderTickets();
     return;
@@ -285,9 +312,12 @@ async function initializeServiceWorker() {
     return;
   }
 
-  state.serviceWorkerRegistration = await navigator.serviceWorker.register("/app/sw.js", {
-    scope: "/app/"
-  });
+  state.serviceWorkerRegistration = await navigator.serviceWorker.register(
+    "/app/sw.js",
+    {
+      scope: "/app/"
+    }
+  );
 }
 
 async function initializeFirebase() {
@@ -295,10 +325,15 @@ async function initializeFirebase() {
     return;
   }
 
-  state.firebaseConfig = await apiFetch("/api/v1/firebase-config", { method: "GET" });
+  state.firebaseConfig = await apiFetch("/api/v1/firebase-config", {
+    method: "GET"
+  });
 
   if (!hasFirebaseConfig(state.firebaseConfig)) {
-    showAlert("Firebase public config is missing. Add the FIREBASE_* web values to .env before testing sign-in.", "error");
+    showAlert(
+      "Firebase public config is missing. Add the FIREBASE_* web values to .env before testing sign-in.",
+      "error"
+    );
     return;
   }
 
@@ -309,14 +344,11 @@ async function initializeFirebase() {
   }
 
   state.auth = firebase.auth();
-  state.messaging = firebase.messaging.isSupported()
-    ? firebase.messaging()
-    : null;
+  state.messaging = firebase.messaging.isSupported() ? firebase.messaging() : null;
 
   state.auth.onAuthStateChanged(async (user) => {
     const previousUserId = state.currentUser?.uid;
     state.currentUser = user;
-    state.idToken = user ? await user.getIdToken() : null;
     state.lastUserId = user?.uid || null;
     if (previousUserId && previousUserId !== state.lastUserId) {
       state.tickets = [];
@@ -408,13 +440,16 @@ async function purchaseTicket(ticketId) {
 }
 
 async function enableNotifications() {
-  if (!state.currentUser || !state.idToken) {
+  if (!state.currentUser) {
     showAlert("Sign in before enabling reminders.", "error");
     return;
   }
 
   if (!state.messaging || !state.firebaseConfig?.vapidKey) {
-    showAlert("Firebase Messaging or FIREBASE_VAPID_KEY is not configured.", "error");
+    showAlert(
+      "Firebase Messaging or FIREBASE_VAPID_KEY is not configured.",
+      "error"
+    );
     return;
   }
 
@@ -438,7 +473,7 @@ async function enableNotifications() {
 }
 
 async function unregisterNotificationToken() {
-  if (!state.currentUser || !state.idToken || !state.messaging || !state.firebaseConfig?.vapidKey) {
+  if (!state.currentUser || !state.messaging || !state.firebaseConfig?.vapidKey) {
     return;
   }
 
@@ -463,11 +498,17 @@ async function unregisterNotificationToken() {
 }
 
 function wireEvents() {
-  elements.signInButton.addEventListener("click", () => signIn().catch((error) => showAlert(error.message, "error")));
-  elements.signOutButton.addEventListener("click", () => signOut().catch((error) => showAlert(error.message, "error")));
+  elements.signInButton.addEventListener("click", () =>
+    signIn().catch((error) => showAlert(error.message, "error"))
+  );
+  elements.signOutButton.addEventListener("click", () =>
+    signOut().catch((error) => showAlert(error.message, "error"))
+  );
   elements.refreshButton.addEventListener("click", () => refreshDashboard());
   elements.reserveForm.addEventListener("submit", reserveTickets);
-  elements.notificationButton.addEventListener("click", () => enableNotifications().catch((error) => showAlert(error.message, "error")));
+  elements.notificationButton.addEventListener("click", () =>
+    enableNotifications().catch((error) => showAlert(error.message, "error"))
+  );
   elements.ticketsList.addEventListener("click", (event) => {
     const button = event.target.closest("[data-purchase-ticket]");
     if (button) {

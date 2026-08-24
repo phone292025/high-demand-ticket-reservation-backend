@@ -18,6 +18,9 @@ services:
         value: "true"
       - key: ENABLE_RATE_LIMIT
         value: "true"
+      # Render terminates TLS at its own edge proxy.
+      - key: TRUST_PROXY_HOPS
+        value: "1"
       - key: ENABLE_LEGACY_DEMO_ROUTES
         value: "false"
       - key: ENABLE_PUBLIC_CLEANUP

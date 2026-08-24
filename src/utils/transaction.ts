@@ -1,4 +1,4 @@
-import { DataSource, QueryRunner } from "typeorm";
+import type { DataSource, QueryRunner } from "typeorm";
 
 class Mutex {
   private tail: Promise<void> = Promise.resolve();
