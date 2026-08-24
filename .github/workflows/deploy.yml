@@ -42,10 +42,49 @@ jobs:
       - name: Audit production dependencies
         run: npm run audit:ci
 
+  # The unit suite runs against the working tree, so it cannot catch a file the
+  # Dockerfile forgets to COPY. A missing tsconfig.build.json broke the Render
+  # build while every other check stayed green.
+  docker-image:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build the production image
+        run: docker build -t ticket-api:ci .
+
+      - name: Boot it and wait for readiness
+        run: |
+          docker run -d --name ticket-api-ci -p 3000:3000             -e RUN_MIGRATIONS_ON_START=true             -e SEED_ON_START=true             -e ENABLE_RATE_LIMIT=false             ticket-api:ci
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3000/health/ready > /dev/null 2>&1; then
+              echo "Container is ready."
+              curl -sS http://127.0.0.1:3000/health/ready
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "Container never became ready." >&2
+          docker logs ticket-api-ci >&2
+          exit 1
+
+      - name: Check the published docs are not empty
+        run: |
+          COUNT=$(curl -fsS http://127.0.0.1:3000/api-docs.json | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>console.log(Object.keys(JSON.parse(d).paths||{}).length))")
+          echo "Swagger paths in the image: $COUNT"
+          test "$COUNT" -gt 0 || (echo "Docs rendered zero paths inside the container" >&2 && exit 1)
+
+      - name: Stop the container
+        if: always()
+        run: docker rm -f ticket-api-ci || true
+
   deploy:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    needs: build-test
+    needs: [build-test, docker-image]
     steps:
       - name: Validate deploy secrets
         env:
