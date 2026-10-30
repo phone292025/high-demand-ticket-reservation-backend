@@ -667,6 +667,8 @@ If `affected rows = 1`, the API creates a `PENDING` ticket in the same transacti
 
 The stock decrement and ticket insert are not separate standalone operations. If ticket creation fails after stock is decremented, the transaction rolls back and stock is restored.
 
+One user can hold at most 5 seats per concert in unexpired `PENDING` tickets. The same transaction sums the user's current holds before it touches stock, and a request that would go past the limit gets `409 HOLD_LIMIT_REACHED`. Expired and completed tickets do not count. Without this check, the per-user rate limit of 5 reservations a minute, each for up to 5 tickets, let one account keep about 125 seats on hold.
+
 ## Indexing
 
 The tickets table has a normal SQLite B-tree index:
