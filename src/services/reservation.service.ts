@@ -4,7 +4,7 @@ import { Ticket } from "../entities/Ticket";
 import { TicketStatus } from "../entities/TicketStatus";
 import { AppError } from "../errors/AppError";
 import type { NotificationService } from "./notification.service";
-import { reservationExpiry } from "../utils/date";
+import { formatSqliteDate, reservationExpiry } from "../utils/date";
 import { runWriteTransaction } from "../utils/transaction";
 
 export interface ReserveTicketInput {
@@ -13,6 +13,9 @@ export interface ReserveTicketInput {
   category?: string;
   quantity: number;
 }
+
+/** Seats one user may hold as unexpired PENDING tickets for one concert. */
+export const MAX_HELD_SEATS_PER_CONCERT = 5;
 
 export interface ReservationOptions {
   forceTicketSaveFailure?: boolean;
@@ -31,6 +34,25 @@ export class ReservationService {
     this.validateInput(input);
 
     return runWriteTransaction(this.dataSource, async (queryRunner) => {
+      const held = await queryRunner.manager
+        .createQueryBuilder(Ticket, "ticket")
+        .select("COALESCE(SUM(ticket.quantity), 0)", "seats")
+        .where("ticket.concertId = :concertId", { concertId: input.concertId })
+        .andWhere("ticket.userId = :userId", { userId: input.userId.trim() })
+        .andWhere("ticket.status = :status", { status: TicketStatus.Pending })
+        .andWhere("ticket.expiresAt > :now", {
+          now: formatSqliteDate(new Date())
+        })
+        .getRawOne<{ seats: number }>();
+
+      if (Number(held?.seats ?? 0) + input.quantity > MAX_HELD_SEATS_PER_CONCERT) {
+        throw new AppError(
+          409,
+          "HOLD_LIMIT_REACHED",
+          `You can hold at most ${MAX_HELD_SEATS_PER_CONCERT} seats for this concert at a time`
+        );
+      }
+
       const updateResult = await queryRunner.manager
         .createQueryBuilder()
         .update(Concert)
