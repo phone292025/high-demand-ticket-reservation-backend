@@ -166,7 +166,7 @@ AND availableStock >= :quantity;
 
 If SQLite reports `affected rows = 1`, stock was safely reserved and the API creates the `PENDING` ticket in the same transaction. If `affected rows = 0`, not enough stock was available, so the transaction rolls back and the API returns `409 SOLD_OUT`.
 
-The implementation also uses a small in-process write mutex around SQLite write transactions. This is included because SQLite is file-based and uses one TypeORM connection in this project. The mutex reduces local write contention, while the real correctness guarantee still comes from the database transaction plus the atomic conditional stock update.
+The implementation also uses a small in-process write mutex around SQLite write transactions. TypeORM's SQLite driver gives every caller the same connection, so a write made outside the mutex joins whatever transaction is open at that moment and is lost if that transaction rolls back. Every write in `src/services` therefore goes through `runWriteTransaction`, and `src/tests/write-serialization.test.ts` races writes against sold-out rollbacks to keep it that way. The expiry warning for a reservation is saved inside the reservation's own transaction, so the ticket and its warning commit together. If the warning cannot be saved, the reservation fails and its stock is restored.
 
 ### Why These Columns Were Indexed
 
