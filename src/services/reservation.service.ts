@@ -3,9 +3,8 @@ import { Concert } from "../entities/Concert";
 import { Ticket } from "../entities/Ticket";
 import { TicketStatus } from "../entities/TicketStatus";
 import { AppError } from "../errors/AppError";
-import { logger } from "../logger/logger";
 import type { NotificationService } from "./notification.service";
-import { reservationExpiry } from "../utils/date";
+import { formatSqliteDate, reservationExpiry } from "../utils/date";
 import { runWriteTransaction } from "../utils/transaction";
 
 export interface ReserveTicketInput {
@@ -14,6 +13,9 @@ export interface ReserveTicketInput {
   category?: string;
   quantity: number;
 }
+
+/** Seats one user may hold as unexpired PENDING tickets for one concert. */
+export const MAX_HELD_SEATS_PER_CONCERT = 5;
 
 export interface ReservationOptions {
   forceTicketSaveFailure?: boolean;
@@ -31,57 +33,65 @@ export class ReservationService {
   ): Promise<Ticket> {
     this.validateInput(input);
 
-    const ticket = await runWriteTransaction(
-      this.dataSource,
-      async (queryRunner) => {
-        const updateResult = await queryRunner.manager
-          .createQueryBuilder()
-          .update(Concert)
-          .set({ availableStock: () => `"availableStock" - :reservedQuantity` })
-          .where("id = :concertId", { concertId: input.concertId })
-          .andWhere("availableStock >= :quantity", { quantity: input.quantity })
-          .setParameter("reservedQuantity", input.quantity)
-          .execute();
+    return runWriteTransaction(this.dataSource, async (queryRunner) => {
+      const held = await queryRunner.manager
+        .createQueryBuilder(Ticket, "ticket")
+        .select("COALESCE(SUM(ticket.quantity), 0)", "seats")
+        .where("ticket.concertId = :concertId", { concertId: input.concertId })
+        .andWhere("ticket.userId = :userId", { userId: input.userId.trim() })
+        .andWhere("ticket.status = :status", { status: TicketStatus.Pending })
+        .andWhere("ticket.expiresAt > :now", {
+          now: formatSqliteDate(new Date())
+        })
+        .getRawOne<{ seats: number }>();
 
-        if ((updateResult.affected ?? 0) === 0) {
-          const concertExists = await queryRunner.manager.exists(Concert, {
-            where: { id: input.concertId }
-          });
+      if (Number(held?.seats ?? 0) + input.quantity > MAX_HELD_SEATS_PER_CONCERT) {
+        throw new AppError(
+          409,
+          "HOLD_LIMIT_REACHED",
+          `You can hold at most ${MAX_HELD_SEATS_PER_CONCERT} seats for this concert at a time`
+        );
+      }
 
-          if (!concertExists) {
-            throw new AppError(404, "NOT_FOUND", "Concert not found");
-          }
+      const updateResult = await queryRunner.manager
+        .createQueryBuilder()
+        .update(Concert)
+        .set({ availableStock: () => `"availableStock" - :reservedQuantity` })
+        .where("id = :concertId", { concertId: input.concertId })
+        .andWhere("availableStock >= :quantity", { quantity: input.quantity })
+        .setParameter("reservedQuantity", input.quantity)
+        .execute();
 
-          throw new AppError(409, "SOLD_OUT", "Sold Out");
+      if ((updateResult.affected ?? 0) === 0) {
+        const concertExists = await queryRunner.manager.exists(Concert, {
+          where: { id: input.concertId }
+        });
+
+        if (!concertExists) {
+          throw new AppError(404, "NOT_FOUND", "Concert not found");
         }
 
-        const ticket = queryRunner.manager.create(Ticket, {
-          concertId: input.concertId,
-          userId: input.userId.trim(),
-          status: options.forceTicketSaveFailure
-            ? ("INVALID_STATUS" as TicketStatus)
-            : TicketStatus.Pending,
-          expiresAt: reservationExpiry(),
-          category: input.category?.trim() || "General",
-          quantity: input.quantity
-        });
-
-        return queryRunner.manager.save(Ticket, ticket);
+        throw new AppError(409, "SOLD_OUT", "Sold Out");
       }
-    );
 
-    if (this.notificationService) {
-      await this.notificationService
-        .scheduleExpirationWarning(ticket)
-        .catch((error) => {
-          logger.error(
-            { error, ticketId: ticket.id },
-            "Failed to schedule FCM warning"
-          );
-        });
-    }
+      const ticket = queryRunner.manager.create(Ticket, {
+        concertId: input.concertId,
+        userId: input.userId.trim(),
+        status: options.forceTicketSaveFailure
+          ? ("INVALID_STATUS" as TicketStatus)
+          : TicketStatus.Pending,
+        expiresAt: reservationExpiry(),
+        category: input.category?.trim() || "General",
+        quantity: input.quantity
+      });
 
-    return ticket;
+      const savedTicket = await queryRunner.manager.save(Ticket, ticket);
+      await this.notificationService?.scheduleExpirationWarning(
+        queryRunner.manager,
+        savedTicket
+      );
+      return savedTicket;
+    });
   }
 
   async reserveTicket(

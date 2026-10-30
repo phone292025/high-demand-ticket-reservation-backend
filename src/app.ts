@@ -307,7 +307,7 @@ export function createApp(dataSource: DataSource, options: CreateAppOptions = {}
    *             schema:
    *               $ref: '#/components/schemas/ErrorResponse'
    *       409:
-   *         description: Sold out.
+   *         description: Sold out, or the user already holds the seat limit for this concert.
    *         content:
    *           application/json:
    *             schema:
@@ -363,7 +363,7 @@ export function createApp(dataSource: DataSource, options: CreateAppOptions = {}
    *       400:
    *         description: Validation error.
    *       409:
-   *         description: Sold out.
+   *         description: Sold out, or the user already holds the seat limit for this concert.
    *       429:
    *         description: Rate limit exceeded.
    */

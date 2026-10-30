@@ -206,6 +206,79 @@ describe("Reservations", () => {
     ).rejects.toThrow(/availableStock must be between 0 and totalStock/);
   });
 
+  describe("hold limit per user per concert", () => {
+    async function availableStock(concertId: number): Promise<number> {
+      const concert = await harness.dataSource
+        .getRepository(Concert)
+        .findOneByOrFail({ id: concertId });
+      return concert.availableStock;
+    }
+
+    it("rejects a reservation that would take one user past the limit", async () => {
+      const concert = await harness.createConcert(20);
+      await harness.reserve(concert.id, "holder", 3).expect(201);
+
+      const response = await harness.reserve(concert.id, "holder", 3).expect(409);
+
+      expect(response.body.error).toBe("HOLD_LIMIT_REACHED");
+      expect(await availableStock(concert.id)).toBe(17);
+    });
+
+    it("allows reserving up to the limit across several requests", async () => {
+      const concert = await harness.createConcert(20);
+      await harness.reserve(concert.id, "holder", 3).expect(201);
+      await harness.reserve(concert.id, "holder", 2).expect(201);
+
+      expect(await availableStock(concert.id)).toBe(15);
+    });
+
+    it("counts each user and each concert separately", async () => {
+      const first = await harness.createConcert(20);
+      const second = await harness.createConcert(20);
+      await harness.reserve(first.id, "holder", 5).expect(201);
+
+      await harness.reserve(second.id, "holder", 5).expect(201);
+      await harness.reserve(first.id, "someone_else", 5).expect(201);
+    });
+
+    it("ignores expired and completed tickets", async () => {
+      const concert = await harness.createConcert(20);
+      const ticketRepository = harness.dataSource.getRepository(Ticket);
+      const base = {
+        concertId: concert.id,
+        userId: "holder",
+        category: "General",
+        quantity: 5
+      };
+      await ticketRepository.save([
+        ticketRepository.create({
+          ...base,
+          status: TicketStatus.Pending,
+          expiresAt: new Date("2020-01-01T00:00:00.000Z")
+        }),
+        ticketRepository.create({
+          ...base,
+          status: TicketStatus.Completed,
+          expiresAt: null
+        })
+      ]);
+
+      await harness.reserve(concert.id, "holder", 5).expect(201);
+    });
+
+    it("holds the limit when one user fires requests at the same time", async () => {
+      const concert = await harness.createConcert(20);
+
+      const responses = await Promise.all(
+        Array.from({ length: 6 }, () => harness.reserve(concert.id, "holder", 2))
+      );
+      const statuses = responses.map((response) => response.status).sort();
+
+      expect(statuses).toEqual([201, 201, 409, 409, 409, 409]);
+      expect(await availableStock(concert.id)).toBe(16);
+    });
+  });
+
   it("refuses to inflate availableStock past totalStock", async () => {
     const concert = await harness.createConcert(1);
 

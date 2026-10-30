@@ -1,4 +1,4 @@
-import type { DataSource } from "typeorm";
+import type { DataSource, EntityManager } from "typeorm";
 import { In, LessThan, LessThanOrEqual } from "typeorm";
 import type { Messaging } from "firebase-admin/messaging";
 import { FcmToken } from "../entities/FcmToken";
@@ -9,6 +9,7 @@ import {
 } from "../entities/TicketNotification";
 import { TicketStatus } from "../entities/TicketStatus";
 import { logger } from "../logger/logger";
+import { runWriteTransaction } from "../utils/transaction";
 
 export interface NotificationSendPayload {
   title: string;
@@ -102,44 +103,50 @@ export class NotificationService {
   ) {}
 
   async registerFcmToken(userId: string, token: string): Promise<FcmToken> {
-    const tokenRepository = this.dataSource.getRepository(FcmToken);
-    const trimmedToken = token.trim();
-    const existingToken = await tokenRepository.findOne({
-      where: { token: trimmedToken }
-    });
+    return runWriteTransaction(this.dataSource, async ({ manager }) => {
+      const tokenRepository = manager.getRepository(FcmToken);
+      const trimmedToken = token.trim();
+      const existingToken = await tokenRepository.findOne({
+        where: { token: trimmedToken }
+      });
 
-    if (existingToken && existingToken.userId !== userId) {
-      // Handover is legitimate; recorded for audit.
-      logger.warn(
-        { previousUserId: existingToken.userId, userId },
-        "FCM token reassigned to a different user"
-      );
-    }
-
-    const savedToken = existingToken
-      ? await tokenRepository.save(Object.assign(existingToken, { userId }))
-      : await tokenRepository.save(
-          tokenRepository.create({
-            userId,
-            token: trimmedToken
-          })
+      if (existingToken && existingToken.userId !== userId) {
+        // Handover is legitimate; recorded for audit.
+        logger.warn(
+          { previousUserId: existingToken.userId, userId },
+          "FCM token reassigned to a different user"
         );
+      }
 
-    await this.evictOldestTokensOverLimit(userId);
-    return savedToken;
+      const savedToken = existingToken
+        ? await tokenRepository.save(Object.assign(existingToken, { userId }))
+        : await tokenRepository.save(
+            tokenRepository.create({
+              userId,
+              token: trimmedToken
+            })
+          );
+
+      await this.evictOldestTokensOverLimit(manager, userId);
+      return savedToken;
+    });
   }
 
   async unregisterFcmToken(userId: string, token: string): Promise<void> {
-    const tokenRepository = this.dataSource.getRepository(FcmToken);
-    await tokenRepository.delete({
-      userId,
-      token: token.trim()
-    });
+    await runWriteTransaction(this.dataSource, ({ manager }) =>
+      manager.getRepository(FcmToken).delete({
+        userId,
+        token: token.trim()
+      })
+    );
   }
 
   /** Trims a user back to MAX_FCM_TOKENS_PER_USER, oldest first. */
-  private async evictOldestTokensOverLimit(userId: string): Promise<void> {
-    const tokenRepository = this.dataSource.getRepository(FcmToken);
+  private async evictOldestTokensOverLimit(
+    manager: EntityManager,
+    userId: string
+  ): Promise<void> {
+    const tokenRepository = manager.getRepository(FcmToken);
 
     // Read only the rows past the cap.
     const staleTokens = await tokenRepository
@@ -164,7 +171,9 @@ export class NotificationService {
     );
   }
 
+  /** Runs inside the reservation's transaction so both commit together. */
   async scheduleExpirationWarning(
+    manager: EntityManager,
     ticket: Ticket
   ): Promise<TicketNotification | null> {
     if (!ticket.expiresAt) {
@@ -172,8 +181,7 @@ export class NotificationService {
     }
 
     const notifyAt = new Date(ticket.expiresAt.getTime() - EXPIRES_SOON_LEAD_MS);
-    const notificationRepository =
-      this.dataSource.getRepository(TicketNotification);
+    const notificationRepository = manager.getRepository(TicketNotification);
 
     return notificationRepository.save(
       notificationRepository.create({
@@ -218,8 +226,6 @@ export class NotificationService {
     notification: TicketNotification,
     now: Date
   ): Promise<"sentCount" | "skippedCount" | "failedCount"> {
-    const notificationRepository =
-      this.dataSource.getRepository(TicketNotification);
     const ticket = await this.dataSource.getRepository(Ticket).findOne({
       where: { id: notification.ticketId }
     });
@@ -232,7 +238,7 @@ export class NotificationService {
     ) {
       notification.status = TicketNotificationStatus.Skipped;
       notification.skippedAt = now;
-      await notificationRepository.save(notification);
+      await this.saveNotification(notification);
       return "skippedCount";
     }
 
@@ -243,7 +249,7 @@ export class NotificationService {
     if (tokens.length === 0) {
       notification.status = TicketNotificationStatus.Skipped;
       notification.skippedAt = now;
-      await notificationRepository.save(notification);
+      await this.saveNotification(notification);
       return "skippedCount";
     }
 
@@ -282,7 +288,7 @@ export class NotificationService {
       notification.status = TicketNotificationStatus.Sent;
       notification.sentAt = now;
       notification.error = null;
-      await notificationRepository.save(notification);
+      await this.saveNotification(notification);
       return "sentCount";
     } catch (error) {
       logger.error({ error }, "Failed to send FCM notification");
@@ -298,15 +304,13 @@ export class NotificationService {
     notification: TicketNotification,
     message: string
   ): Promise<"failedCount"> {
-    const notificationRepository =
-      this.dataSource.getRepository(TicketNotification);
     const retriesRemaining = notification.attempts < MAX_NOTIFICATION_ATTEMPTS;
 
     notification.status = retriesRemaining
       ? TicketNotificationStatus.Pending
       : TicketNotificationStatus.Failed;
     notification.error = message;
-    await notificationRepository.save(notification);
+    await this.saveNotification(notification);
 
     logger.warn(
       {
@@ -321,14 +325,21 @@ export class NotificationService {
     return "failedCount";
   }
 
+  /** Held only for the save, never across the FCM network call. */
+  private async saveNotification(notification: TicketNotification): Promise<void> {
+    await runWriteTransaction(this.dataSource, ({ manager }) =>
+      manager.save(TicketNotification, notification)
+    );
+  }
+
   private async pruneInvalidTokens(invalidTokens: string[]): Promise<void> {
     if (invalidTokens.length === 0) {
       return;
     }
 
-    await this.dataSource
-      .getRepository(FcmToken)
-      .delete({ token: In(invalidTokens) });
+    await runWriteTransaction(this.dataSource, ({ manager }) =>
+      manager.getRepository(FcmToken).delete({ token: In(invalidTokens) })
+    );
 
     logger.info(
       { prunedCount: invalidTokens.length },
