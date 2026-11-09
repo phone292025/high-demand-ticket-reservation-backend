@@ -669,6 +669,29 @@ The stock decrement and ticket insert are not separate standalone operations. If
 
 One user can hold at most 5 seats per concert in unexpired `PENDING` tickets. The same transaction sums the user's current holds before it touches stock, and a request that would go past the limit gets `409 HOLD_LIMIT_REACHED`. Expired and completed tickets do not count. Without this check, the per-user rate limit of 5 reservations a minute, each for up to 5 tickets, let one account keep about 125 seats on hold.
 
+## Load Test
+
+`src/scripts/load-test.ts` starts the real app on a temporary SQLite file and sends 1,000 reservation requests over HTTP at the same moment, for a concert with 100 seats. It then counts the seats on saved tickets and checks that sold seats plus remaining stock equal the starting stock.
+
+As a control, it runs the same load against a naive endpoint that reads stock, then writes it, with no transaction or write lock. If the naive endpoint did not oversell, the test would prove nothing.
+
+```powershell
+npm.cmd run load:test -- --buyers=1000 --stock=100 --runs=5
+```
+
+Results from 5 runs per row on a Windows laptop (Node 24, 150 client connections):
+
+| Endpoint        | Each buyer asks for | Seats sold | Oversold | Time to answer all 1,000 |
+| --------------- | ------------------- | ---------- | -------- | ------------------------ |
+| `POST /reserve` | 1 seat              | 100        | 0        | 0.97 to 1.58 s           |
+| `POST /reserve` | 1 to 5 seats        | 100        | 0        | 0.95 to 1.09 s           |
+| Naive control   | 1 seat              | 1,000      | 900      | 0.65 to 0.76 s           |
+| Naive control   | 1 to 5 seats        | 3,000      | 2,900    | 1.28 to 1.79 s           |
+
+The script exits with code 1 if any real run oversells or loses stock.
+
+Limits of this result: the load generator and the server share one machine and one Node process, and the write mutex only protects a single process. Running two API instances against one database is not covered; see the SQLite concurrency note below.
+
 ## Indexing
 
 The tickets table has a normal SQLite B-tree index:

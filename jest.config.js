@@ -13,6 +13,7 @@ module.exports = {
     "!src/scripts/proof-*.ts",
     "!src/scripts/explain.ts",
     "!src/scripts/stress-purchase.ts",
+    "!src/scripts/load-test.ts",
     "!src/scripts/run-migrations.ts",
     // Thin adapters over external services; exercised by their doubles instead
     // of by loading the real Firebase, Redis, and Sentry clients.
