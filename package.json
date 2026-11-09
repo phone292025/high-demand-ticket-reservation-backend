@@ -17,6 +17,7 @@
     "explain": "ts-node src/scripts/explain.ts",
     "proof:rollback": "ts-node src/scripts/proof-rollback.ts",
     "stress:purchase": "ts-node src/scripts/stress-purchase.ts",
+    "load:test": "ts-node --transpile-only src/scripts/load-test.ts",
     "proof:logs": "ts-node src/scripts/proof-logs.ts",
     "proof:rate-limit": "ts-node src/scripts/proof-rate-limit.ts",
     "test": "jest --runInBand",
